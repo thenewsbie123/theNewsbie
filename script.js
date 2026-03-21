@@ -2129,27 +2129,25 @@ setTimeout(() => {
   updateFabState();
   updateMobileBottomNav();
 }, 0);
-async function loadArticles(){
 
-const container = document.getElementById("articles-container");
+async function loadArticles() {
+  const container = document.getElementById("articles-container");
 
-const response = await fetch("https://api.github.com/repos/thenewsbie123/theNewsbie/contents/articles");
+  if (!container) return;
 
-const files = await response.json();
+  const response = await fetch("https://api.github.com/repos/thenewsbie123/theNewsbie/contents/articles");
+  const files = await response.json();
 
-files.forEach(file => {
+  files.forEach(file => {
+    const card = document.createElement("div");
 
-const card = document.createElement("div");
+    card.innerHTML = `
+      <h3>${file.name.replace(".md","")}</h3>
+      <a href="${file.download_url}" target="_blank">Read Article</a>
+    `;
 
-card.innerHTML = `
-<h3>${file.name.replace(".md","")}</h3>
-<a href="${file.download_url}" target="_blank">Read Article</a>
-`;
-
-container.appendChild(card);
-
-});
-
+    container.appendChild(card);
+  });
 }
 
-loadArticles();
+document.addEventListener("DOMContentLoaded", loadArticles);
