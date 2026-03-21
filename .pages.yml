@@ -1,0 +1,14 @@
+{
+  "media": { "output": "images", "path": "images" },
+  "content": [
+    {
+      "name": "Articles",
+      "label": "Articles",
+      "path": "/",
+      "fields": [
+        { "name": "title", "label": "Title", "type": "string" },
+        { "name": "body", "label": "Content", "type": "rich-text" }
+      ]
+    }
+  ]
+}
