@@ -7,7 +7,7 @@
     {
       "name": "Articles",
       "label": "Articles",
-      "path": "/", 
+      "path": "/",
       "view": {
         "fields": ["title", "featured"]
       },
