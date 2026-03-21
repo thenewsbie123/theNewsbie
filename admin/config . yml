@@ -1,17 +1,5 @@
 backend:
   name: github
-  repo: thenewsbie123/theNewsbie # Your username/repository name
+  repo: thenewsbie123/theNewsbie
   branch: main
-
-media_folder: "images"
-public_folder: "/images"
-
-collections:
-  - name: "blog"
-    label: "Articles"
-    folder: "content" # Change this to the folder where your articles are stored
-    create: true
-    fields:
-      - {label: "Title", name: "title", widget: "string"}
-      - {label: "Featured", name: "featured", widget: "boolean", default: false}
-      - {label: "Body", name: "body", widget: "markdown"}
+  base_url: https://proxy.decapcms.org # This line is the missing link
