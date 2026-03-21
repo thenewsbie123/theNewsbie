@@ -2,7 +2,6 @@ backend:
   name: github
   repo: thenewsbie123/theNewsbie
   branch: main
-  base_url: https://proxy.decapcms.org
 
 media_folder: "images"
 public_folder: "/images"
