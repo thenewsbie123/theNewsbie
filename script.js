@@ -2153,7 +2153,7 @@ async function loadArticles() {
 document.addEventListener("DOMContentLoaded", loadArticles);
 
 async function loadArticles() {
-  const response = await fetch("http://localhost:1337/api/articles");
+  const response = await fetch("http://newsbie-api.onrender.com/api/articles");
   const data = await response.json();
 
   const container = document.getElementById("news-container");
