@@ -2129,3 +2129,23 @@ setTimeout(() => {
   updateFabState();
   updateMobileBottomNav();
 }, 0);
+
+async function loadArticles() {
+  const response = await fetch("http://localhost:1337/api/articles");
+  const data = await response.json();
+
+  const container = document.getElementById("news-container");
+
+  data.data.forEach(article => {
+    const newsCard = document.createElement("div");
+
+    newsCard.innerHTML = `
+      <h3>${article.title}</h3>
+      <p>${article.category}</p>
+    `;
+
+    container.appendChild(newsCard);
+  });
+}
+
+loadArticles();
