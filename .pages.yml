@@ -1,0 +1,26 @@
+{
+  "media": {
+    "output": "images",
+    "path": "images"
+  },
+  "content": [
+    {
+      "type": "collection",
+      "name": "articles",
+      "label": "Articles",
+      "path": "articles",
+      "fields": [
+        {
+          "name": "title",
+          "label": "Title",
+          "type": "string"
+        },
+        {
+          "name": "body",
+          "label": "Content",
+          "type": "rich-text"
+        }
+      ]
+    }
+  ]
+}
