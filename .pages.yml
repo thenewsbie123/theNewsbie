@@ -1,0 +1,21 @@
+{
+  "media": {
+    "output": "images",
+    "path": "images"
+  },
+  "content": [
+    {
+      "name": "Articles",
+      "label": "Articles",
+      "path": "/", 
+      "view": {
+        "fields": ["title", "featured"]
+      },
+      "fields": [
+        { "name": "title", "label": "Title", "type": "string" },
+        { "name": "featured", "label": "Featured Article?", "type": "boolean" },
+        { "name": "body", "label": "Article Content", "type": "rich-text" }
+      ]
+    }
+  ]
+}
