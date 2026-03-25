@@ -1,3 +1,38 @@
+/* ===============================
+   API CONFIG
+================================ */
+
+const API_BASE = "http://localhost:3000/api";
+
+let token = localStorage.getItem("token") || null;
+
+async function apiRequest(url, method = "GET", body = null) {
+
+  const options = {
+    method,
+    headers: {
+      "Content-Type": "application/json"
+    }
+  };
+
+  if (token) {
+    options.headers["Authorization"] = "Bearer " + token;
+  }
+
+  if (body) {
+    options.body = JSON.stringify(body);
+  }
+
+  const res = await fetch(API_BASE + url, options);
+
+  if (!res.ok) {
+    throw new Error("API request failed");
+  }
+
+  return await res.json();
+}
+
+
 /* ================================================================
    THE NEWSBIE — script.js
    All JavaScript for the site.
@@ -165,8 +200,18 @@ const DEFAULT_AUTHORS = [
   { id: 3, name: "Dr. Elena Vasquez", role: "Science & Environment Editor", bio: "Dr. Vasquez holds a PhD in Climate Science from MIT. She leads The Newsbie's environmental coverage.", avatar: "", social: { tw: "", li: "", ig: "", fb: "", web: "https://elenavasquez.com" } },
 ];
 let authors = JSON.parse(localStorage.getItem('nb_authors') || 'null') || DEFAULT_AUTHORS;
+let articles = [];
 
-let articles = JSON.parse(localStorage.getItem('nb_articles') || 'null') || DEFAULT_ARTICLES;
+async function loadArticles() {
+  const res = await fetch("/api/articles");
+  const data = await res.json();
+
+  articles = data;
+
+  renderHome();
+}
+
+loadArticles();
 let highlights = JSON.parse(localStorage.getItem('nb_highlights') || 'null') || DEFAULT_HIGHLIGHTS;
 let editorials = JSON.parse(localStorage.getItem('nb_editorials') || 'null') || DEFAULT_EDITORIALS;
 let users = JSON.parse(localStorage.getItem('nb_users') || 'null') || DEFAULT_USERS;
@@ -184,19 +229,12 @@ if (!currentUser) {
 let ejsCfg = JSON.parse(localStorage.getItem('nb_ejs') || '{}');
 
 let currentFilter = 'all', manageFilter = 'all', currentArticleIdx = 0;
-let editingArticleId = null, editingEditorialId = null;
 let autoScrolling = false, autoScrollInterval = null, scrollSpeed = 3, articleFontSize = 18, focusMode = false;
 let uploadedImgData = null;
 let hlDragIdx = null, edDragIdx = null;
 
 const save = () => {
-  localStorage.setItem('nb_articles', JSON.stringify(articles));
-  localStorage.setItem('nb_highlights', JSON.stringify(highlights));
-  localStorage.setItem('nb_editorials', JSON.stringify(editorials));
-  localStorage.setItem('nb_users', JSON.stringify(users));
-  localStorage.setItem('nb_sections', JSON.stringify(sectionCfg));
-  localStorage.setItem('nb_authors', JSON.stringify(authors));
-  localStorage.setItem('nb_editorial_cfg', JSON.stringify(editorialCfg));
+  console.log("Local storage disabled — using MongoDB backend");
 };
 
 /* ══════════════════════════════════════════════════
@@ -714,32 +752,35 @@ function closeLogin() {
 }
 document.getElementById('login-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeLogin(); });
 
-function doLogin() {
-  // Clear any previous error
-  document.getElementById('lc-error').textContent = '';
-  const u = document.getElementById('lc-user').value.trim();
-  const p = document.getElementById('lc-pass').value;
 
-  if (!u || !p) {
-    document.getElementById('lc-error').textContent = 'Please enter your username and password.';
-    return;
-  }
+ async function doLogin(){
 
-  const found = users.find(x => x.username === u && x.password === p);
-  if (!found) {
-    document.getElementById('lc-error').textContent = 'Incorrect username or password.';
-    document.getElementById('lc-pass').value = '';
-    // Shake the card for visual feedback
-    const card = document.querySelector('.login-card');
-    card.style.animation = 'none';
-    card.offsetHeight; // reflow
-    card.style.animation = 'shake .3s ease';
-    setTimeout(() => { card.style.animation = ''; }, 300);
-    return;
-  }
+const username = document.getElementById("lc-user").value;
+const password = document.getElementById("lc-pass").value;
 
-  // Successful login
-  currentUser = found;
+const res = await apiRequest("/auth/login","POST",{
+  username,
+  password
+});
+
+if(!res.token){
+  showToast("Login failed");
+  return;
+}
+
+token = res.token;
+localStorage.setItem("token", token);
+
+currentUser = { username };
+
+closeLogin();
+showAdminPanel();
+
+showToast("Login successful");
+
+}
+
+
   // Persist in BOTH sessionStorage AND localStorage so mobile doesn't lose session
   try {
     sessionStorage.setItem('nb_session', JSON.stringify(currentUser));
@@ -823,7 +864,7 @@ function switchTab(tab, el) {
 /* ══════════════════════════════════════════════════
    WRITE / EDIT ARTICLE
 ══════════════════════════════════════════════════ */
-function publishOrSave() {
+async function publishOrSave() {
   if (!perm('write') && !perm('editAny')) { showToast('Permission denied.'); return }
   const title = document.getElementById('a-title').value.trim();
   const authorIdVal = document.getElementById('a-author-id').value;
@@ -841,32 +882,32 @@ function publishOrSave() {
   const featured = perm('feature') && document.getElementById('a-featured').value === '1';
   const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
   const now = dateStr();
-
-  if (editingArticleId !== null) {
-    // SAVE EDIT
-    const idx = articles.findIndex(a => a.id === editingArticleId);
-    if (idx < 0) { showToast('Article not found.'); return }
-    if (!canEdit(articles[idx])) { showToast('Permission denied.'); return }
-    if (featured) articles.forEach(a => a.featured = false);
-    Object.assign(articles[idx], { title, subtitle, author, authorId: authorObj ? authorObj.id : null, category: cat, img: img || articles[idx].img || '', excerpt: excerpt || subtitle, tags, featured, content, readTime: calcReadTime(content), lastEdited: now, lastEditedBy: currentUser.name });
-    save(); renderHome(); cancelWriteEdit();
-    showToast('✓ Article updated!');
-    switchTab('manage', document.getElementById('tab-manage'));
-  } else {
-    // PUBLISH NEW
-    if (featured) articles.forEach(a => a.featured = false);
-    const status = perm('publish') ? 'published' : 'pending';
-    articles.unshift({ id: Date.now(), title, subtitle, author, authorId: authorObj ? authorObj.id : null, category: cat, date: now, content, img: img || '', excerpt: excerpt || subtitle, tags, featured, readTime: calcReadTime(content), comments: [], status, createdBy: currentUser.name });
-    save();
-    if (status === 'published') renderHome();
-    clearWriteForm(); updatePendingBadge();
-    if (status === 'published') notifySubscribers(title, cat);
-    showToast(status === 'published' ? '🗞 Article published!' : '📤 Submitted for review!');
-    switchTab('manage', document.getElementById('tab-manage'));
   }
+ async function cancelWriteEdit(){
+
+if(editingArticleId !== null){
+
+const title = document.getElementById("a-title").value;
+const subtitle = document.getElementById("a-subtitle").value;
+const author = document.getElementById("a-author").value;
+const cat = document.getElementById("a-cat").value;
+const content = document.getElementById("a-content").value;
+
+await apiRequest("/articles/" + editingArticleId,"PUT",{
+  title,
+  subtitle,
+  author,
+  category: cat,
+  content
+});
+
+await loadArticles();
+
 }
-function cancelWriteEdit() {
-  editingArticleId = null;
+
+clearWriteForm();
+
+}
   document.getElementById('write-edit-banner').classList.add('js-hidden');
   const pb = document.getElementById('write-pub-btn');
   if (pb) pb.textContent = currentUser?.role === 'contributor' ? '📤 Submit for Review' : '📰 Publish Article';
@@ -963,7 +1004,15 @@ function renderManage() {
 }
 function approveArticle(idx) { if (!perm('approve')) return; articles[idx].status = 'published'; save(); renderManage(); renderHome(); showToast('✓ Article approved and published!') }
 function toggleFeatured(idx) { if (!perm('feature')) return; articles.forEach(a => a.featured = false); articles[idx].featured = true; save(); renderManage(); renderHome(); showToast('Featured story updated!') }
-function deleteArticle(idx) { if (!perm('delete')) return; if (!confirm('Delete this article?')) return; articles.splice(idx, 1); save(); renderManage(); renderHome(); showToast('Article deleted.') }
+async function deleteArticle(idx){
+
+const article = articles[idx];
+
+await apiRequest("/articles/"+article._id,"DELETE");
+
+await loadArticles();
+
+} 
 
 /* ══════════════════════════════════════════════════
    SECTIONS TAB

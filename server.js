@@ -4,18 +4,21 @@
 require("dotenv").config(); // Load .env variables FIRST
 const express = require("express");
 const connectDB = require("./config/db");
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Connect to MongoDB ──────────────────────────
 connectDB();
-
+const path = require("path");
 // ── Middleware ──────────────────────────────────
 app.use(express.json({ limit: "10mb" }));        // Parse JSON request bodies (10mb for base64 images)
 app.use(express.urlencoded({ extended: true })); // Parse form data
-app.use(express.static(__dirname));              // Serve your HTML/CSS/JS files
+app.use(express.static(path.join(__dirname,"thenewsbie")));              // Serve your HTML/CSS/JS files
 
+
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "thenewsbie","index.html"));
+});
 // ── API Routes ──────────────────────────────────
 app.use("/api/auth",        require("./routes/auth"));
 app.use("/api/articles",    require("./routes/articles"));
