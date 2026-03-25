@@ -792,7 +792,7 @@ showToast("Login successful");
   updateFabState();
   updateMobileBottomNav();
   showToast(`✓ Signed in as ${currentUser.name}`);
-}
+{
 
 function doLogout() {
   currentUser = null;
