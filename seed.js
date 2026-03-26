@@ -223,7 +223,7 @@ const DEFAULT_EDITORIALS = [
 
 // ── Seed Function ─────────────────────────────────────────────────────────────
 
-const seedDatabase = require("./seed"); {
+const seedDatabase = async () => {
   try {
     await connectDB();
 
@@ -279,4 +279,4 @@ const seedDatabase = require("./seed"); {
   process.exit(0);
 };
 
-module.exports=seedDatabase;
+seedDatabase();
