@@ -13,6 +13,7 @@ const path = require("path");
 // ── Middleware ──────────────────────────────────
 app.use(express.json({ limit: "10mb" }));        // Parse JSON request bodies (10mb for base64 images)
 app.use(express.urlencoded({ extended: true })); // Parse form data
+app.use("/uploads", express.static("uploads"));
 app.use(express.static(path.join(__dirname,"thenewsbie")));              // Serve your HTML/CSS/JS files
 
 

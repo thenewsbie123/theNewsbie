@@ -199,19 +199,20 @@ const DEFAULT_AUTHORS = [
   { id: 2, name: "Marcus Chen", role: "Technology & Democracy Correspondent", bio: "Marcus writes on the intersection of technology, society, and political systems. Former researcher at Stanford Internet Observatory.", avatar: "", social: { tw: "marcuschen", li: "marcuschen", ig: "", fb: "", web: "" } },
   { id: 3, name: "Dr. Elena Vasquez", role: "Science & Environment Editor", bio: "Dr. Vasquez holds a PhD in Climate Science from MIT. She leads The Newsbie's environmental coverage.", avatar: "", social: { tw: "", li: "", ig: "", fb: "", web: "https://elenavasquez.com" } },
 ];
-let authors = JSON.parse(localStorage.getItem('nb_authors') || 'null') || DEFAULT_AUTHORS;
+let authors = DEFAULT_AUTHORS; // will be replaced by API data below
 let articles = [];
 
 async function loadArticles() {
-  const res = await fetch("/api/articles");
-  const data = await res.json();
-
-  articles = data;
-
+  try {
+    const res = await fetch("/api/articles");
+    const data = await res.json();
+    articles = Array.isArray(data) ? data : [];
+  } catch(e) {
+    articles = [];
+  }
   renderHome();
 }
 
-loadArticles();
 let highlights = JSON.parse(localStorage.getItem('nb_highlights') || 'null') || DEFAULT_HIGHLIGHTS;
 let editorials = JSON.parse(localStorage.getItem('nb_editorials') || 'null') || DEFAULT_EDITORIALS;
 let users = JSON.parse(localStorage.getItem('nb_users') || 'null') || DEFAULT_USERS;
@@ -232,6 +233,18 @@ let currentFilter = 'all', manageFilter = 'all', currentArticleIdx = 0;
 let autoScrolling = false, autoScrollInterval = null, scrollSpeed = 3, articleFontSize = 18, focusMode = false;
 let uploadedImgData = null;
 let hlDragIdx = null, edDragIdx = null;
+let editingArticleId = null;
+
+// Load articles from MongoDB now that all state is ready
+loadArticles();
+
+// Load authors from MongoDB (replaces DEFAULT_AUTHORS)
+(async () => {
+  try {
+    const data = await fetch("/api/authors").then(r => r.json());
+    if (Array.isArray(data) && data.length) { authors = data; populateAuthorSelect(); }
+  } catch(e) {}
+})();
 
 const save = () => {
   console.log("Local storage disabled — using MongoDB backend");
@@ -276,7 +289,12 @@ const PLACEHOLDERS = [
   'https://images.unsplash.com/photo-1519669556878-63bdad8a1a49?w=800&q=70',
   'https://images.unsplash.com/photo-1495020689067-958852a7765e?w=800&q=70',
 ];
-function getImg(a) { return a.img || PLACEHOLDERS[a.id % PLACEHOLDERS.length] }
+function getImg(a) {
+  if (a.img && a.img.trim()) return a.img;
+  // Works with both MongoDB _id (hex string) and numeric id
+  const seed = a._id ? parseInt(a._id.toString().slice(-4), 16) : (a.id || 0);
+  return PLACEHOLDERS[seed % PLACEHOLDERS.length];
+}
 function getEdImg(e, i) { return e.img || PLACEHOLDERS[i % PLACEHOLDERS.length] }
 
 function dateStr() { return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) }
@@ -339,7 +357,7 @@ function renderHome() {
   // HERO SIDE — use sectionCfg.editors if set
   let sideArts;
   if (sectionCfg.editors?.length) {
-    sideArts = sectionCfg.editors.map(id => articles.find(a => a.id === id)).filter(a => a && (a.status || 'published') === 'published' && a.id !== feat?.id).slice(0, 3);
+    sideArts = sectionCfg.editors.map(id => articles.find(a => (a._id || a.id) == id)).filter(a => a && (a.status || 'published') === 'published' && (a._id || a.id) != (feat?._id || feat?.id)).slice(0, 3);
   }
   if (!sideArts || !sideArts.length) sideArts = rest.slice(0, 3);
   document.getElementById('hero-side').innerHTML =
@@ -358,7 +376,7 @@ function renderHome() {
   // ARTICLES GRID — use sectionCfg.latest if set
   let gridArts;
   if (sectionCfg.latest?.length) {
-    gridArts = sectionCfg.latest.map(id => articles.find(a => a.id === id)).filter(a => a && (a.status || 'published') === 'published');
+    gridArts = sectionCfg.latest.map(id => articles.find(a => (a._id || a.id) == id)).filter(a => a && (a.status || 'published') === 'published');
   }
   if (!gridArts || !gridArts.length) gridArts = rest.slice(3);
   const grid = document.getElementById('articles-grid');
@@ -376,7 +394,7 @@ function renderHome() {
   // TRENDING — use sectionCfg.trending if set
   let trendArts;
   if (sectionCfg.trending?.length) {
-    trendArts = sectionCfg.trending.map(id => articles.find(a => a.id === id)).filter(a => a && (a.status || 'published') === 'published').slice(0, 5);
+    trendArts = sectionCfg.trending.map(id => articles.find(a => (a._id || a.id) == id)).filter(a => a && (a.status || 'published') === 'published').slice(0, 5);
   }
   if (!trendArts || !trendArts.length) trendArts = pub.slice(0, 5);
   document.getElementById('trending-list').innerHTML = trendArts.map((a, i) => `
@@ -658,13 +676,24 @@ function shareSocial(p) {
 /* ══════════════════════════════════════════════════
    COMMENTS
 ══════════════════════════════════════════════════ */
-function postComment(idx) {
+async function postComment(idx) {
   const name = document.getElementById('cmt-name').value.trim();
   const text = document.getElementById('cmt-text').value.trim();
   if (!name || !text) { showToast('Please enter your name and comment.'); return }
-  if (!articles[idx].comments) articles[idx].comments = [];
-  articles[idx].comments.push({ name, text, date: dateStr() });
-  save();
+
+  const a = articles[idx];
+  const articleId = a._id || a.id;
+
+  try {
+    const updatedComments = await apiRequest("/articles/" + articleId + "/comments", "POST", { name, text });
+    // Sync local array with server response
+    articles[idx].comments = updatedComments;
+  } catch(e) {
+    // Fallback: update locally so UI still works even if API fails
+    if (!articles[idx].comments) articles[idx].comments = [];
+    articles[idx].comments.push({ name, text, date: dateStr() });
+  }
+
   document.getElementById('cmt-name').value = '';
   document.getElementById('cmt-text').value = '';
   const last = articles[idx].comments.at(-1);
@@ -753,46 +782,43 @@ function closeLogin() {
 document.getElementById('login-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeLogin(); });
 
 
- async function doLogin(){
+ async function doLogin() {
+  const username = document.getElementById("lc-user").value.trim();
+  const password = document.getElementById("lc-pass").value.trim();
+  if (!username || !password) { showToast("Please enter username and password."); return; }
 
-const username = document.getElementById("lc-user").value;
-const password = document.getElementById("lc-pass").value;
-
-const res = await apiRequest("/auth/login","POST",{
-  username,
-  password
-});
-
-if(!res.token){
-  showToast("Login failed");
-  return;
-}
-
-token = res.token;
-localStorage.setItem("token", token);
-
-currentUser = { username };
-
-closeLogin();
-showAdminPanel();
-
-showToast("Login successful");
-
-}
-
-
-  // Persist in BOTH sessionStorage AND localStorage so mobile doesn't lose session
   try {
-    sessionStorage.setItem('nb_session', JSON.stringify(currentUser));
-    localStorage.setItem('nb_session_persist', JSON.stringify(currentUser));
-  } catch(e) {}
+    const res = await apiRequest("/auth/login", "POST", { username, password });
 
-  closeLogin();
-  showAdminPanel();
-  updateFabState();
-  updateMobileBottomNav();
-  showToast(`✓ Signed in as ${currentUser.name}`);
-{
+    if (!res.token) {
+      document.getElementById('lc-error').textContent = "Login failed. Check your credentials.";
+      return;
+    }
+
+    // Save JWT token for all future API calls
+    token = res.token;
+    localStorage.setItem("token", token);
+
+    // Store the FULL user object returned by the API (includes name, role, _id)
+    currentUser = { _id: res._id, id: res._id, name: res.name, username: res.username, role: res.role };
+
+    // Persist in both storages so mobile browsers don't lose the session
+    try {
+      sessionStorage.setItem("nb_session", JSON.stringify(currentUser));
+      localStorage.setItem("nb_session_persist", JSON.stringify(currentUser));
+    } catch(e) {}
+
+    closeLogin();
+    showAdminPanel();
+    updateFabState();
+    updateMobileBottomNav();
+    showToast(`✓ Signed in as ${currentUser.name}`);
+
+  } catch (err) {
+    document.getElementById('lc-error').textContent = "Login failed. Check your credentials.";
+    showToast("Login failed. Please try again.");
+  }
+}
 
 function doLogout() {
   currentUser = null;
@@ -870,7 +896,7 @@ async function publishOrSave() {
   const authorIdVal = document.getElementById('a-author-id').value;
   const authorManual = (document.getElementById('a-author').value.trim()
     || document.getElementById('a-author-manual').value.trim());
-  const authorObj = authorIdVal ? authors.find(au => au.id === parseInt(authorIdVal)) : null;
+  const authorObj = authorIdVal ? authors.find(au => (au._id || au.id) == authorIdVal) : null;
   const author = authorObj ? authorObj.name : (authorManual || 'The Newsbie');
   const content = document.getElementById('a-content').value.trim();
   const cat = document.getElementById('a-cat').value;
@@ -881,33 +907,36 @@ async function publishOrSave() {
   const tagsRaw = document.getElementById('a-tags').value.trim();
   const featured = perm('feature') && document.getElementById('a-featured').value === '1';
   const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
-  const now = dateStr();
+  const status = perm('publish') ? 'published' : 'pending';
+
+  const payload = {
+    title, subtitle, author,
+    authorId: authorIdVal || null,
+    category: cat, content, excerpt, tags,
+    img, featured, status,
+    readTime: calcReadTime(content)
+  };
+
+  try {
+    if (editingArticleId) {
+      await apiRequest("/articles/" + editingArticleId, "PUT", payload);
+      showToast('✓ Article updated!');
+    } else {
+      await apiRequest("/articles", "POST", payload);
+      showToast(status === 'published' ? '✓ Article published!' : '📤 Submitted for review!');
+    }
+    editingArticleId = null;
+    document.getElementById('write-edit-banner').classList.add('js-hidden');
+    const pb = document.getElementById('write-pub-btn');
+    if (pb) pb.textContent = currentUser?.role === 'contributor' ? '📤 Submit for Review' : '📰 Publish Article';
+    clearWriteForm();
+    await loadArticles();
+  } catch (err) {
+    showToast('Error saving article. Are you still logged in?');
   }
- async function cancelWriteEdit(){
-
-if(editingArticleId !== null){
-
-const title = document.getElementById("a-title").value;
-const subtitle = document.getElementById("a-subtitle").value;
-const author = document.getElementById("a-author").value;
-const cat = document.getElementById("a-cat").value;
-const content = document.getElementById("a-content").value;
-
-await apiRequest("/articles/" + editingArticleId,"PUT",{
-  title,
-  subtitle,
-  author,
-  category: cat,
-  content
-});
-
-await loadArticles();
-
 }
-
-clearWriteForm();
-
-}
+ function cancelWriteEdit() {
+  editingArticleId = null;
   document.getElementById('write-edit-banner').classList.add('js-hidden');
   const pb = document.getElementById('write-pub-btn');
   if (pb) pb.textContent = currentUser?.role === 'contributor' ? '📤 Submit for Review' : '📰 Publish Article';
@@ -923,7 +952,7 @@ function clearWriteForm() {
 function editArticle(idx) {
   const a = articles[idx];
   if (!canEdit(a)) { showToast('Permission denied.'); return }
-  editingArticleId = a.id;
+  editingArticleId = a._id || a.id;
   document.getElementById('a-title').value = a.title || '';
   document.getElementById('a-cat').value = a.category || 'World';
   document.getElementById('a-subtitle').value = a.subtitle || '';
@@ -1314,24 +1343,51 @@ function saveEjsConfig() {
 }
 function getSubs() { return JSON.parse(localStorage.getItem('nb_subs') || '[]') }
 function saveSubs(s) { localStorage.setItem('nb_subs', JSON.stringify(s)) }
-function renderSubscribers() {
-  const subs = getSubs();
+async function renderSubscribers() {
   if (ejsCfg.key) document.getElementById('ejs-key').value = ejsCfg.key || '';
   if (ejsCfg.svc) document.getElementById('ejs-svc').value = ejsCfg.svc || '';
   if (ejsCfg.tmpl) document.getElementById('ejs-tmpl').value = ejsCfg.tmpl || '';
+
+  let subs = [];
+  try {
+    subs = await apiRequest("/subscribers");
+  } catch(e) {
+    // Fallback to localStorage if API fails (e.g. not logged in yet)
+    subs = getSubs();
+  }
+
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   document.getElementById('sub-stats').innerHTML = `
 <div class="sub-stat"><div class="sub-stat-num">${subs.length}</div><div class="sub-stat-lbl">Total Subscribers</div></div>
-<div class="sub-stat"><div class="sub-stat-num">${subs.filter(s => new Date(s.date).getTime() > weekAgo).length}</div><div class="sub-stat-lbl">New This Week</div></div>
+<div class="sub-stat"><div class="sub-stat-num">${subs.filter(s => new Date(s.date || s.createdAt).getTime() > weekAgo).length}</div><div class="sub-stat-lbl">New This Week</div></div>
 <div class="sub-stat"><div class="sub-stat-num">${ejsCfg.key ? '✓' : '—'}</div><div class="sub-stat-lbl">Email Service</div></div>
   `;
   const listEl = document.getElementById('sub-list');
   listEl.innerHTML = subs.length === 0
     ? `<div class="sub-row" style="justify-content:center;color:var(--ink4);font-style:italic">No subscribers yet.</div>`
-    : [...subs].reverse().map(s => `<div class="sub-row"><div class="sub-avatar">${(s.email || '?')[0].toUpperCase()}</div><div class="sub-email">${s.email}</div><div class="sub-date">${s.date || '—'}</div><button class="sub-del" onclick="removeSubscriber('${s.email}')">✕</button></div>`).join('');
+    : [...subs].reverse().map(s => `<div class="sub-row"><div class="sub-avatar">${(s.email || '?')[0].toUpperCase()}</div><div class="sub-email">${s.email}</div><div class="sub-date">${s.date || '—'}</div><button class="sub-del" onclick="removeSubscriber('${s._id || s.email}')">✕</button></div>`).join('');
 }
-function removeSubscriber(email) { if (!confirm(`Remove ${email}?`)) return; saveSubs(getSubs().filter(s => s.email !== email)); renderSubscribers(); showToast('Subscriber removed.') }
-function clearAllSubs() { if (!confirm('Remove ALL subscribers?')) return; saveSubs([]); renderSubscribers(); showToast('All subscribers cleared.') }
+async function removeSubscriber(id) {
+  if (!confirm(`Remove this subscriber?`)) return;
+  try {
+    await apiRequest("/subscribers/" + id, "DELETE");
+  } catch(e) {
+    // Fallback: remove from localStorage by email
+    saveSubs(getSubs().filter(s => s.email !== id));
+  }
+  renderSubscribers();
+  showToast('Subscriber removed.');
+}
+async function clearAllSubs() {
+  if (!confirm('Remove ALL subscribers?')) return;
+  try {
+    await apiRequest("/subscribers/all/clear", "DELETE");
+  } catch(e) {
+    saveSubs([]);
+  }
+  renderSubscribers();
+  showToast('All subscribers cleared.');
+}
 function sendBroadcast() {
   const subject = document.getElementById('bc-subject').value.trim();
   const body = document.getElementById('bc-body').value.trim();
@@ -1363,19 +1419,31 @@ function notifySubscribers(title, type) {
 /* ══════════════════════════════════════════════════
    NEWSLETTER SUBSCRIPTION
 ══════════════════════════════════════════════════ */
-function subscribeNewsletter() {
+async function subscribeNewsletter() {
   const email = document.getElementById('nl-email').value.trim();
   if (!email || !email.includes('@')) { showToast('Please enter a valid email address.'); return }
+
+  try {
+    await apiRequest("/subscribers", "POST", { email });
+  } catch(e) {
+    // If the API says already subscribed, still show success to the user
+    if (!e.message?.includes('already')) {
+      showToast('Subscription failed. Please try again.');
+      return;
+    }
+  }
+
+  // Also save locally for email broadcast fallback
   const subs = getSubs();
   const now = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   if (!subs.find(s => s.email === email)) { subs.push({ email, date: now }); saveSubs(subs); }
+
   initEjs();
   const welcomeMsg = `Hi ${email.split('@')[0]},\n\nWelcome to The Daily Newsbie! You'll now receive breaking news, editorial insights, and in-depth analysis directly in your inbox.\n\n— The Newsbie Editorial Team`;
   const doWelcome = () => {
     if (ejsCfg.key && ejsCfg.svc && ejsCfg.tmpl) {
       return emailjs.send(ejsCfg.svc, ejsCfg.tmpl, { to_email: email, to_name: email.split('@')[0], subject: 'Welcome to The Daily Newsbie!', message: welcomeMsg });
     }
-    window.location.href = `mailto:${email}?subject=${encodeURIComponent('Welcome to The Daily Newsbie!')}&body=${encodeURIComponent(welcomeMsg)}`;
     return Promise.resolve();
   };
   doWelcome().finally(() => {
@@ -1389,19 +1457,50 @@ function subscribeNewsletter() {
    USERS
 ══════════════════════════════════════════════════ */
 const RPERM = { admin: 'Write · Edit all · Publish · Delete · Users', editor: 'Write · Edit all · Publish · Approve', contributor: 'Write · Edit own · Submit for review', viewer: 'View list only' };
-function renderUsers() {
+async function renderUsers() {
+  let backendUsers = [];
+  try {
+    backendUsers = await apiRequest("/users");
+  } catch(e) {
+    backendUsers = users; // fallback to local DEFAULT_USERS
+  }
+
   const tbody = document.getElementById('users-tbody');
-  tbody.innerHTML = users.map((u, i) => `
+  tbody.innerHTML = backendUsers.map((u, i) => {
+    const isMe = (u._id || u.id) == (currentUser?._id || currentUser?.id);
+    return `
 <tr>
-  <td><strong>${u.name}</strong>${u.id === currentUser?.id ? ' <span style="font-size:10px;color:var(--gold)">(you)</span>' : ''}</td>
+  <td><strong>${u.name}</strong>${isMe ? ' <span style="font-size:10px;color:var(--gold)">(you)</span>' : ''}</td>
   <td style="font-family:var(--fs);font-size:12px;color:var(--ink3)">${u.username}</td>
-  <td>${u.id === currentUser?.id ? `<span class="role-badge role-${u.role}">${u.role}</span>` : `<select class="role-select" onchange="changeRole(${i},this.value)">${['admin', 'editor', 'contributor', 'viewer'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${r}</option>`).join('')}</select>`}</td>
+  <td>${isMe ? `<span class="role-badge role-${u.role}">${u.role}</span>` : `<select class="role-select" onchange="changeRole('${u._id || u.id}',this.value)">${['admin', 'editor', 'contributor', 'viewer'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${r}</option>`).join('')}</select>`}</td>
   <td style="font-family:var(--fs);font-size:11px;color:var(--ink3)">${RPERM[u.role]}</td>
-  <td>${u.id !== currentUser?.id ? `<button class="aar-btn" onclick="removeUser(${i})" style="color:var(--accent)">Remove</button>` : '<span style="font-size:10px;color:var(--ink4)">Active session</span>'}</td>
-</tr>`).join('');
+  <td>${!isMe ? `<button class="aar-btn" onclick="removeUser('${u._id || u.id}')" style="color:var(--accent)">Remove</button>` : '<span style="font-size:10px;color:var(--ink4)">Active session</span>'}</td>
+</tr>`;
+  }).join('');
 }
-function changeRole(idx, role) { if (!perm('users')) return; users[idx].role = role; save(); renderUsers(); showToast(`Role updated to ${role}`) }
-function removeUser(idx) { if (!perm('users')) return; if (!confirm(`Remove ${users[idx].name}?`)) return; users.splice(idx, 1); save(); renderUsers(); showToast('User removed.') }
+async function changeRole(userId, role) {
+  if (!perm('users')) return;
+  const validRoles = ['admin', 'editor', 'contributor', 'viewer'];
+  if (!validRoles.includes(role)) return;
+  try {
+    await apiRequest("/users/" + userId + "/role", "PATCH", { role });
+    showToast(`Role updated to ${role}`);
+  } catch(e) {
+    showToast('Failed to update role.');
+  }
+  renderUsers();
+}
+async function removeUser(userId) {
+  if (!perm('users')) return;
+  if (!confirm('Remove this user?')) return;
+  try {
+    await apiRequest("/users/" + userId, "DELETE");
+    showToast('User removed.');
+  } catch(e) {
+    showToast('Failed to remove user.');
+  }
+  renderUsers();
+}
 function toggleAddUser() {
   const form = document.getElementById('add-user-form');
   const isShowing = form.classList.contains('js-hidden');
@@ -1413,7 +1512,7 @@ function toggleAddUser() {
     setTimeout(() => form.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
   }
 }
-function addUser() {
+async function addUser() {
   const name = document.getElementById('nu-name').value.trim();
   const username = document.getElementById('nu-user').value.trim();
   const password = document.getElementById('nu-pass').value.trim();
@@ -1425,13 +1524,18 @@ function addUser() {
   if (!name) { showErr('⚠ Full name is required.'); document.getElementById('nu-name')?.focus(); return; }
   if (!username) { showErr('⚠ Username is required.'); document.getElementById('nu-user')?.focus(); return; }
   if (!password) { showErr('⚠ Password is required.'); document.getElementById('nu-pass')?.focus(); return; }
-  if (users.find(u => u.username === username)) { showErr('⚠ Username already exists. Choose another.'); document.getElementById('nu-user')?.focus(); return; }
-  users.push({ id: Date.now(), name, username, password, role });
-  const userErrEl = document.getElementById('user-form-error'); if(userErrEl) userErrEl.textContent = '';
-  save(); toggleAddUser();
-  ['nu-name', 'nu-user', 'nu-pass'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  const roleReset = document.getElementById('nu-role'); if (roleReset) roleReset.value = 'viewer';
-  renderUsers(); showToast(`✓ ${name} added as ${role}`);
+
+  try {
+    await apiRequest("/users", "POST", { name, username, password, role });
+    const userErrEl = document.getElementById('user-form-error'); if(userErrEl) userErrEl.textContent = '';
+    toggleAddUser();
+    ['nu-name', 'nu-user', 'nu-pass'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const roleReset = document.getElementById('nu-role'); if (roleReset) roleReset.value = 'viewer';
+    await renderUsers();
+    showToast(`✓ ${name} added as ${role}`);
+  } catch(e) {
+    showErr('⚠ Could not add user. Username may already be taken.');
+  }
 }
 
 /* ══════════════════════════════════════════════════
@@ -1502,22 +1606,21 @@ function populateAuthorSelect() {
   const sel = document.getElementById('a-author-id');
   if (!sel) return;
   sel.innerHTML = '<option value="">— Select author —</option>' +
-    authors.map(au => `<option value="${au.id}">${au.name}${au.role ? ' — ' + au.role : ''}</option>`).join('');
+    authors.map(au => `<option value="${au._id || au.id}">${au.name}${au.role ? ' — ' + au.role : ''}</option>`).join('');
 }
 
 function onAuthorSelect(val) {
   const card = document.getElementById('author-preview-card');
   const manualInput = document.getElementById('a-author-manual');
   if (!val) { card.classList.remove('show'); manualInput.value = ''; return; }
-  const au = authors.find(a => a.id === parseInt(val));
+  const au = authors.find(a => (a._id || a.id) == val);
   if (!au) { card.classList.remove('show'); return; }
-  // Fill avatar
   const avEl = document.getElementById('apc-avatar');
   if (au.avatar) { avEl.innerHTML = `<img src="${au.avatar}" alt="${au.name}" onerror="this.parentElement.textContent='${au.name[0]}'">`; } else { avEl.textContent = au.name[0]; }
   document.getElementById('apc-name').textContent = au.name;
   document.getElementById('apc-role').textContent = au.role || '';
   card.classList.add('show');
-  manualInput.value = au.name; // keep in sync for save
+  manualInput.value = au.name;
   const primaryInput = document.getElementById('a-author');
   if (primaryInput) primaryInput.value = au.name;
 }
@@ -1565,15 +1668,14 @@ function previewAuthorAvatar(url) {
   else { img.classList.remove('show'); }
 }
 
-function saveAuthor() {
+async function saveAuthor() {
   const name = document.getElementById('au-name').value.trim();
   const authErrEl = document.getElementById('author-form-error');
   const clearAuthErr = () => { if(authErrEl) authErrEl.textContent = ''; };
   const showAuthErr = (msg) => { if(authErrEl) { authErrEl.textContent = msg; authErrEl.scrollIntoView({behavior:'smooth',block:'nearest'}); } showToast(msg); };
   clearAuthErr();
   if (!name) { showAuthErr('⚠ Author name is required.'); document.getElementById('au-name')?.focus(); return; }
-  const au = {
-    id: editingAuthorId || Date.now(),
+  const payload = {
     name,
     role: document.getElementById('au-role').value.trim(),
     bio: document.getElementById('au-bio').value.trim(),
@@ -1586,23 +1688,35 @@ function saveAuthor() {
       web: document.getElementById('au-web').value.trim(),
     }
   };
-  if (editingAuthorId) {
-    const idx = authors.findIndex(a => a.id === editingAuthorId);
-    if (idx >= 0) authors[idx] = au;
-  } else {
-    authors.push(au);
+  try {
+    if (editingAuthorId) {
+      const updated = await apiRequest("/authors/" + editingAuthorId, "PUT", payload);
+      const idx = authors.findIndex(a => (a._id || a.id) == editingAuthorId);
+      if (idx >= 0) authors[idx] = updated;
+    } else {
+      const created = await apiRequest("/authors", "POST", payload);
+      authors.push(created);
+    }
+    hideAuthorForm();
+    renderAuthorsList();
+    populateAuthorSelect();
+    showToast(editingAuthorId ? '✓ Author updated!' : '✓ Author added!');
+    editingAuthorId = null;
+  } catch(e) {
+    showAuthErr('⚠ Failed to save author. Are you logged in?');
   }
-  save();
-  hideAuthorForm();
-  renderAuthorsList();
-  populateAuthorSelect();
-  showToast(editingAuthorId ? '✓ Author updated!' : '✓ Author added!');
 }
 
-function deleteAuthor(idx) {
+async function deleteAuthor(idx) {
   if (!confirm(`Remove author "${authors[idx].name}"? Articles by this author will keep their name.`)) return;
-  authors.splice(idx, 1);
-  save();
+  const authorId = authors[idx]._id || authors[idx].id;
+  try {
+    await apiRequest("/authors/" + authorId, "DELETE");
+    authors.splice(idx, 1);
+  } catch(e) {
+    showToast('Failed to remove author.');
+    return;
+  }
   renderAuthorsList();
   populateAuthorSelect();
   showToast('Author removed.');

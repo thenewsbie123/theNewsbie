@@ -1,6 +1,6 @@
 // routes/articles.js
 // Handles CRUD operations for articles.
-
+const upload = require("../middleware/upload");
 const express = require("express");
 const router = express.Router();
 const Article = require("../models/Article");
@@ -20,6 +20,12 @@ router.get("/", async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
+});
+
+router.post("/upload", upload.single("image"), (req, res) => {
+  res.json({
+    imageUrl: "/uploads/" + req.file.filename
+  });
 });
 
 // GET /api/articles/:id — Get a single article by ID (public)
