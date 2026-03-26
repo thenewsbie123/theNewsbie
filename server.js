@@ -5,7 +5,7 @@ require("dotenv").config(); // Load .env variables FIRST
 const express = require("express");
 const connectDB = require("./config/db");
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 // ── Connect to MongoDB ──────────────────────────
 connectDB();
@@ -35,6 +35,7 @@ app.get("/api", (req, res) => {
 });
 
 // ── Start Server ────────────────────────────────
+constPORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
