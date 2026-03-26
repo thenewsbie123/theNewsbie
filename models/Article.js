@@ -1,92 +1,36 @@
 // models/Article.js
-// Defines the structure of an "Article" in your database.
-// Based on DEFAULT_ARTICLES in script.js
-
 const mongoose = require("mongoose");
 
-// Sub-schema for comments (articles can have many comments)
-const commentSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  text: { type: String, required: true },
-  date: { type: String },
-});
+const commentSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    text: { type: String, required: true },
+    date: { type: String },
+  },
+  { _id: true }
+);
 
 const articleSchema = new mongoose.Schema(
   {
-    title: {
-      type: String,
-      required: [true, "Title is required"],
-      trim: true,
-    },
-    subtitle: {
-      type: String,
-      default: "",
-    },
-    author: {
-      type: String,
-      required: [true, "Author name is required"],
-    },
-    authorId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Author", // Links to the Author collection
-      default: null,
-    },
-    category: {
-      type: String,
-      enum: ["World", "Politics", "Technology", "Culture", "Science", "Opinion", "Business", "Editorial"],
-      default: "World",
-    },
-    date: {
-      type: String, // Stored as a readable string e.g. "March 20, 2026"
-    },
-    readTime: {
-      type: String,
-      default: "1 min read",
-    },
-    excerpt: {
-      type: String,
-      default: "",
-    },
-    tags: {
-      type: [String], // Array of strings e.g. ["Oil", "Geopolitics"]
-      default: [],
-    },
-    img: {
-      type: String, // URL or base64 image data
-      default: "",
-    },
-    featured: {
-      type: Boolean,
-      default: false,
-    },
-    status: {
-      type: String,
-      enum: ["published", "pending", "draft"],
-      default: "published",
-    },
-    content: {
-      type: String,
-      required: [true, "Content is required"],
-    },
-    comments: {
-      type: [commentSchema],
-      default: [],
-    },
-    createdBy: {
-      type: String, // Username of who created it
-      default: "",
-    },
-    lastEdited: {
-      type: String,
-    },
-    lastEditedBy: {
-      type: String,
-    },
+    title:       { type: String, required: true, trim: true },
+    subtitle:    { type: String, default: "" },
+    author:      { type: String, required: true },
+    authorId:    { type: String, default: null },   // reference to Author._id (stored as string for flexibility)
+    category:    { type: String, required: true, enum: ["World", "Politics", "Technology", "Science", "Culture", "Opinion", "Editorial", "Business"] },
+    content:     { type: String, required: true },
+    excerpt:     { type: String, default: "" },
+    img:         { type: String, default: "" },
+    tags:        { type: [String], default: [] },
+    featured:    { type: Boolean, default: false },
+    status:      { type: String, enum: ["published", "pending", "draft"], default: "published" },
+    readTime:    { type: String, default: "" },
+    date:        { type: String, default: "" },       // human-readable date set by the route
+    lastEdited:  { type: String, default: "" },
+    lastEditedBy:{ type: String, default: "" },
+    createdBy:   { type: String, default: "" },
+    comments:    { type: [commentSchema], default: [] },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Article = mongoose.model("Article", articleSchema);
-module.exports = Article;
+module.exports = mongoose.model("Article", articleSchema);
