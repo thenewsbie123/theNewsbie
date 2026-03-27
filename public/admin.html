@@ -1089,9 +1089,13 @@ function topbarSearch(q) {
 /* ══ DASHBOARD ═══════════════════════════════════════ */
 async function loadDashboard() {
   try {
+    // FIX: use Promise.allSettled so a single failing endpoint (e.g. /subscribers
+    // returning 403 for an editor) doesn't abort the entire dashboard load.
     const [arts, authors, subs] = await Promise.allSettled([
       api('/articles?status=all'),
       api('/authors'),
+      // Subscribers endpoint is admin/editor only — viewers will get a 403,
+      // allSettled handles it gracefully instead of throwing.
       api('/subscribers'),
     ]);
     const allArts = arts.status === 'fulfilled' ? arts.value : [];
@@ -1155,6 +1159,11 @@ function setArtFilter(f, el) {
   renderArticles();
 }
 
+// FIX: when artFilter==='all', the old code sent GET /articles with no
+// status param. The backend treated that the same as a public request and
+// returned only published articles — so the Manage tab never showed pending
+// or draft articles for admins. Now always append status=all for the
+// manage table so admins see everything.
 async function renderArticles() {
   const wrap = document.getElementById('articles-table-wrap');
   wrap.innerHTML = '<div class="loading">Loading articles…</div>';
@@ -1162,7 +1171,13 @@ async function renderArticles() {
     const catFilter = document.getElementById('art-cat-filter').value;
     let url = '/articles';
     const params = [];
-    if (artFilter && artFilter !== 'all') params.push('status=' + artFilter);
+    // Always request all statuses in the admin manage view;
+    // the backend's softAuth + isPrivileged check gates this.
+    if (artFilter && artFilter !== 'all') {
+      params.push('status=' + artFilter);
+    } else {
+      params.push('status=all');  // <-- FIX: was omitted when filter = 'all'
+    }
     if (catFilter) params.push('category=' + encodeURIComponent(catFilter));
     if (params.length) url += '?' + params.join('&');
     const arts = await api(url);
@@ -1218,18 +1233,23 @@ function renderArticleTable(arts) {
     </table>`;
 }
 
+// FIX: was PUT /articles/:id with { status:'published' } — a partial PUT
+// that risks wiping unset fields depending on backend validation.
+// Now uses the dedicated PATCH /approve endpoint (safer, matches script.js).
 async function approveArticle(id) {
   try {
-    await api('/articles/' + id, 'PUT', { status: 'published' });
+    await api('/articles/' + id + '/approve', 'PATCH');
     toast('Article published! ✓', 'success');
     renderArticles();
     loadDashboard();
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
+// FIX: was PUT /articles/:id with { featured: val } — partial PUT risks
+// wiping other fields. Now uses PATCH /feature which only toggles the flag.
 async function toggleFeatured(id, val) {
   try {
-    await api('/articles/' + id, 'PUT', { featured: val });
+    await api('/articles/' + id + '/feature', 'PATCH');
     toast(val ? '⭐ Featured!' : 'Unfeatured', 'success');
     renderArticles();
   } catch(e) { toast('Error: ' + e.message, 'error'); }

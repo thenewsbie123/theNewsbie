@@ -1,417 +1,857 @@
 /**
+ * ================================================================
  * THE NEWSBIE — server.js
- * Express + MongoDB + JWT + Multer backend
- * Deployable on Railway as-is.
+ * Node.js + Express + MongoDB (Mongoose) — Railway-ready
+ * ================================================================
  *
- * Environment Variables required on Railway:
- *   MONGODB_URI   — your MongoDB Atlas connection string
- *   JWT_SECRET    — any long random string  (e.g. openssl rand -hex 32)
- *   PORT          — set automatically by Railway; do NOT hardcode
+ * SETUP:
+ *   1. npm install express mongoose bcryptjs jsonwebtoken multer cors dotenv
+ *   2. Create a .env file (see bottom of file for required variables)
+ *   3. Run `node seed.js` ONCE to create your initial admin account
+ *   4. Deploy to Railway — set env vars in the Railway dashboard
+ *
+ * DIRECTORY STRUCTURE expected:
+ *   /server.js          ← this file
+ *   /seed.js            ← generated below, run once
+ *   /public/            ← serve index.html, admin.html, script.js, style.css from here
+ *   /public/uploads/    ← image uploads land here (auto-created)
+ *   /.env               ← local dev only, not committed
+ * ================================================================
  */
 
 'use strict';
+require('dotenv').config();
 
-require("dotenv").config();
+const express   = require('express');
+const mongoose  = require('mongoose');
+const bcrypt    = require('bcryptjs');
+const jwt       = require('jsonwebtoken');
+const cors      = require('cors');
+const multer    = require('multer');
+const path      = require('path');
+const fs        = require('fs');
 
-const express  = require('express');
-const mongoose = require('mongoose');
-const cors     = require('cors');
-const multer   = require('multer');
-const path     = require('path');
-const jwt      = require('jsonwebtoken');
-const fs       = require('fs');
-
-/* ─────────────────────────────────────────
-   APP BOOTSTRAP
-───────────────────────────────────────── */
 const app  = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/newsbie';
 
-const MONGODB_URI = process.env.MONGODB_URI;
-const JWT_SECRET  = process.env.JWT_SECRET || 'newsbie_dev_secret_CHANGE_IN_PROD';
-
-if (!MONGODB_URI) {
-  console.error('❌  MONGODB_URI environment variable is not set. Exiting.');
-  process.exit(1);
-}
-
-/* ─────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────
    MIDDLEWARE
-───────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 app.use(cors());
-// Increase JSON/URL-encoded body limit to 50 MB so large base-64 images don't fail
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-/* ─────────────────────────────────────────
-   STATIC FILES
-   • /public  — index.html, script.js, style.css, admin.html
-   • /uploads — user-uploaded images
-───────────────────────────────────────── */
+// Serve static frontend files
 app.use(express.static(path.join(__dirname, 'public')));
 
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Serve uploaded images
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-/* ─────────────────────────────────────────
-   MONGODB
-───────────────────────────────────────── */
-mongoose
-  .connect(MONGODB_URI)
-  .then(() => console.log('✅  MongoDB connected'))
-  .catch(err => {
-    console.error('❌  MongoDB connection error:', err.message);
-    process.exit(1);
-  });
+/* ──────────────────────────────────────────────────────────────
+   MONGOOSE SCHEMAS
+────────────────────────────────────────────────────────────── */
 
-/* ─────────────────────────────────────────
-   MONGOOSE SCHEMAS & MODELS
-───────────────────────────────────────── */
+// ── User ─────────────────────────────────────────────────────
+const userSchema = new mongoose.Schema({
+  name:     { type: String, required: true, trim: true },
+  username: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  password: { type: String, required: true },
+  role:     { type: String, enum: ['admin', 'editor', 'contributor', 'viewer'], default: 'viewer' },
+}, { timestamps: true });
 
-// Article
-const articleSchema = new mongoose.Schema(
-  {
-    title:    { type: String, required: true, trim: true },
-    subtitle: { type: String, default: '' },
-    author:   { type: String, default: 'The Newsbie' },
-    authorId: { type: Number, default: null },
-    category: { type: String, default: 'World' },
-    date:     { type: String, default: '' },       // human-readable, e.g. "March 27, 2026"
-    readTime: { type: String, default: '' },        // e.g. "5 min read"
-    excerpt:  { type: String, default: '' },
-    tags:     [String],
-    img:      { type: String, default: '' },        // URL or /uploads/filename.jpg
-    featured: { type: Boolean, default: false },
-    status:   { type: String, default: 'published', enum: ['published', 'draft', 'pending'] },
-    content:  { type: String, default: '' },
-    comments: [
-      {
-        name: String,
-        date: String,
-        text: String,
-      },
-    ],
-  },
-  { timestamps: true }
-);
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  this.password = await bcrypt.hash(this.password, 12);
+  next();
+});
+
+userSchema.methods.checkPassword = function(plain) {
+  return bcrypt.compare(plain, this.password);
+};
+
+const User = mongoose.model('User', userSchema);
+
+// ── Article ───────────────────────────────────────────────────
+const commentSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  text: { type: String, required: true },
+  date: { type: String, default: () => todayStr() },
+}, { _id: false });
+
+const articleSchema = new mongoose.Schema({
+  title:    { type: String, required: true, trim: true },
+  subtitle: { type: String, default: '' },
+  author:   { type: String, default: 'The Newsbie' },
+  authorId: { type: Number, default: null },
+  category: { type: String, default: 'World' },
+  content:  { type: String, default: '' },
+  excerpt:  { type: String, default: '' },
+  tags:     { type: [String], default: [] },
+  img:      { type: String, default: '' },
+  featured: { type: Boolean, default: false },
+  status:   { type: String, enum: ['published', 'pending', 'draft'], default: 'published' },
+  readTime: { type: String, default: '1 min read' },
+  date:     { type: String, default: () => todayStr() },
+  comments: { type: [commentSchema], default: [] },
+}, { timestamps: true });
 
 const Article = mongoose.model('Article', articleSchema);
 
-/* ─────────────────────────────────────────
-   IMAGE UPLOAD — MULTER
-───────────────────────────────────────── */
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname).toLowerCase());
+// ── Editorial ─────────────────────────────────────────────────
+const editorialSchema = new mongoose.Schema({
+  type:        { type: String, enum: ['Editorial', 'Opinion', 'Analysis', 'Perspective'], default: 'Editorial' },
+  title:       { type: String, required: true, trim: true },
+  subtitle:    { type: String, default: '' },
+  author:      { type: String, default: 'The Newsbie Editorial Board' },
+  authorTitle: { type: String, default: '' },
+  authorBio:   { type: String, default: '' },
+  content:     { type: String, default: '' },
+  img:         { type: String, default: '' },
+  tags:        { type: [String], default: [] },
+  relatedId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Article', default: null },
+  isPick:      { type: Boolean, default: false },
+  visible:     { type: Boolean, default: true },
+  date:        { type: String, default: () => todayStr() },
+  readTime:    { type: String, default: '3 min read' },
+}, { timestamps: true });
+
+const Editorial = mongoose.model('Editorial', editorialSchema);
+
+// ── Highlight ─────────────────────────────────────────────────
+const highlightSchema = new mongoose.Schema({
+  text:    { type: String, required: true },
+  enabled: { type: Boolean, default: true },
+  type:    { type: String, enum: ['custom', 'article'], default: 'custom' },
+  order:   { type: Number, default: 0 },
+}, { timestamps: true });
+
+const Highlight = mongoose.model('Highlight', highlightSchema);
+
+// ── Author ────────────────────────────────────────────────────
+const authorSchema = new mongoose.Schema({
+  name:   { type: String, required: true, trim: true },
+  role:   { type: String, default: '' },
+  bio:    { type: String, default: '' },
+  avatar: { type: String, default: '' },
+  social: {
+    tw:  { type: String, default: '' },
+    li:  { type: String, default: '' },
+    ig:  { type: String, default: '' },
+    fb:  { type: String, default: '' },
+    web: { type: String, default: '' },
   },
-});
+}, { timestamps: true });
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
-  fileFilter: (_req, file, cb) => {
-    const allowed = /jpe?g|png|gif|webp/i;
-    if (allowed.test(path.extname(file.originalname)) && allowed.test(file.mimetype)) {
-      return cb(null, true);
-    }
-    cb(new Error('Only JPEG, PNG, GIF, or WebP images are allowed.'));
-  },
-});
+const Author = mongoose.model('Author', authorSchema);
 
-/* ─────────────────────────────────────────
-   USERS  (stored in code; swap for DB users if you prefer)
-───────────────────────────────────────── */
-const USERS = [
-  { id: 1, username: 'naman2170',   password: 'Naman123',   role: 'admin',       name: 'Naman'         },
-  { id: 2, username: 'editor',      password: 'editor123',  role: 'editor',      name: 'Sarah Mitchell' },
-  { id: 3, username: 'contributor', password: 'contrib123', role: 'contributor', name: 'James Okafor'   },
-  { id: 4, username: 'viewer',      password: 'view123',    role: 'viewer',      name: 'Guest Reviewer' },
-];
+// ── Subscriber ────────────────────────────────────────────────
+const subscriberSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+}, { timestamps: true });
 
-/* ─────────────────────────────────────────
-   JWT MIDDLEWARE
-───────────────────────────────────────── */
-function requireAuth(req, res, next) {
-  const header = req.headers['authorization'];
-  if (!header) return res.status(401).json({ error: 'Authentication required.' });
+const Subscriber = mongoose.model('Subscriber', subscriberSchema);
 
-  const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+/* ──────────────────────────────────────────────────────────────
+   HELPERS
+────────────────────────────────────────────────────────────── */
+function todayStr() {
+  return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function calcReadTime(content) {
+  const words = (content || '').trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words / 200)) + ' min read';
+}
+
+function makeToken(user) {
+  return jwt.sign(
+    { id: user._id, username: user.username, role: user.role, name: user.name },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────
+   AUTH MIDDLEWARE
+────────────────────────────────────────────────────────────── */
+function authenticate(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Authentication required' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
-    return res.status(401).json({ error: 'Invalid or expired token.' });
+    res.status(401).json({ error: 'Token invalid or expired. Please log in again.' });
   }
 }
 
-/* ─────────────────────────────────────────
-   HELPERS
-───────────────────────────────────────── */
-function humanDate() {
-  const now    = new Date();
-  const months = ['January','February','March','April','May','June',
-                  'July','August','September','October','November','December'];
-  return `${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`;
+// Soft auth — attaches req.user if token present but never blocks the request
+function softAuth(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (token) {
+    try { req.user = jwt.verify(token, JWT_SECRET); } catch {}
+  }
+  next();
 }
 
-function calcReadTime(content = '') {
-  const words = content.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.ceil(words / 200)) + ' min read';
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role))
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    next();
+  };
 }
 
-/* ─────────────────────────────────────────
+const isPrivileged = req => req.user && ['admin', 'editor'].includes(req.user.role);
+
+/* ──────────────────────────────────────────────────────────────
    AUTH ROUTES
-───────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 
 // POST /api/auth/login
-app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required.' });
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password)
+      return res.status(400).json({ error: 'Username and password are required' });
+
+    const user = await User.findOne({ username: username.toLowerCase().trim() });
+    if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+
+    const ok = await user.checkPassword(password);
+    if (!ok) return res.status(401).json({ error: 'Invalid username or password' });
+
+    const token = makeToken(user);
+    res.json({
+      token,
+      user: { id: user._id, username: user.username, role: user.role, name: user.name },
+    });
+  } catch (err) {
+    console.error('[POST /api/auth/login]', err);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  const user = USERS.find(u => u.username === username && u.password === password);
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid username or password.' });
-  }
-
-  const payload = { id: user.id, username: user.username, role: user.role, name: user.name };
-  const token   = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-
-  res.json({ token, user: payload });
 });
 
-// GET /api/auth/me  (verify token, return user info)
-app.get('/api/auth/me', requireAuth, (req, res) => {
-  res.json({ user: req.user });
-});
-
-/* ─────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────
    ARTICLE ROUTES
-───────────────────────────────────────── */
+   BUG FIX: GET /api/articles now correctly handles all filter
+   combinations that both index.html (script.js) and admin.html use:
+     • No status param + admin token  → return all statuses
+     • No status param + public       → return published only
+     • ?status=published/pending/draft → filter by that exact status
+     • ?status=all + admin token      → return all (alias for admins)
+     • ?category=World                → layer on category filter
+────────────────────────────────────────────────────────────── */
 
 // GET /api/articles
-// Public — returns published articles.
-// Admins/editors can pass ?status=all (requires auth header) to see all statuses.
-app.get('/api/articles', async (req, res) => {
+app.get('/api/articles', softAuth, async (req, res) => {
   try {
     const filter = {};
 
-    // If caller is authenticated AND requests all statuses, allow it
-    const authHeader = req.headers['authorization'];
-    let callerRole   = null;
-    if (authHeader) {
-      try {
-        const decoded = jwt.verify(authHeader.replace('Bearer ', ''), JWT_SECRET);
-        callerRole = decoded.role;
-      } catch { /* ignore bad tokens on public route */ }
-    }
-
-    if (req.query.status === 'all' && ['admin', 'editor'].includes(callerRole)) {
-      // no status filter
+    // Status filtering
+    const { status, category } = req.query;
+    if (status && status !== 'all') {
+      // Specific status filter — only privileged users can see non-published
+      if (status !== 'published' && !isPrivileged(req))
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      filter.status = status;
+    } else if (status === 'all' && isPrivileged(req)) {
+      // ?status=all from admin panel — no status filter
+    } else if (!status && isPrivileged(req)) {
+      // Admin/editor calling /articles without any status param → return all
+      // (admin.html's artFilter==='all' case — needs all statuses for the manage table)
     } else {
+      // Public or no token — published only
       filter.status = 'published';
     }
 
-    if (req.query.category) {
-      filter.category = req.query.category;
+    // Contributors see their own articles regardless of status
+    if (req.user?.role === 'contributor' && !isPrivileged(req)) {
+      filter.$or = [{ status: 'published' }, { author: req.user.name }];
+      delete filter.status;
     }
+
+    // Optional category filter
+    if (category) filter.category = category;
 
     const articles = await Article.find(filter).sort({ createdAt: -1 });
     res.json(articles);
   } catch (err) {
-    console.error('GET /api/articles error:', err);
-    res.status(500).json({ error: 'Failed to fetch articles.' });
+    console.error('[GET /api/articles]', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// GET /api/articles/:id
-app.get('/api/articles/:id', async (req, res) => {
+// GET /api/articles/:id  — single article (needed by admin.html's openArticleEdit)
+app.get('/api/articles/:id', softAuth, async (req, res) => {
   try {
     const article = await Article.findById(req.params.id);
-    if (!article) return res.status(404).json({ error: 'Article not found.' });
+    if (!article) return res.status(404).json({ error: 'Article not found' });
+    if (article.status !== 'published' && !isPrivileged(req) &&
+        !(req.user?.role === 'contributor' && article.author === req.user.name))
+      return res.status(403).json({ error: 'Insufficient permissions' });
     res.json(article);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch article.' });
+    console.error('[GET /api/articles/:id]', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /api/articles  — create (requires auth)
-app.post('/api/articles', requireAuth, async (req, res) => {
+// POST /api/articles
+app.post('/api/articles', authenticate, async (req, res) => {
   try {
-    const {
-      title, subtitle, author, authorId, category,
-      content, excerpt, tags, img, featured, status,
-    } = req.body;
+    const role = req.user.role;
+    if (!['admin', 'editor', 'contributor'].includes(role))
+      return res.status(403).json({ error: 'Insufficient permissions' });
 
-    if (!title || !content) {
-      return res.status(400).json({ error: 'title and content are required.' });
-    }
+    // Contributors always submit as pending, regardless of what the body says
+    const status = ['admin', 'editor'].includes(role)
+      ? (req.body.status || 'published')
+      : 'pending';
 
-    // Determine final status — contributors always submit as pending
-    let finalStatus = status || 'published';
-    if (req.user.role === 'contributor') finalStatus = 'pending';
-
-    const article = new Article({
-      title:    title.trim(),
-      subtitle: (subtitle || '').trim(),
-      author:   (author   || req.user.name || 'The Newsbie').trim(),
-      authorId: authorId  || null,
-      category: category  || 'World',
-      date:     humanDate(),
-      readTime: calcReadTime(content),
-      excerpt:  (excerpt  || '').trim(),
-      tags:     Array.isArray(tags) ? tags : [],
-      img:      (img      || '').trim(),
-      featured: featured  || false,
-      status:   finalStatus,
-      content:  content.trim(),
-      comments: [],
+    const article = await Article.create({
+      ...req.body,
+      status,
+      readTime: calcReadTime(req.body.content),
+      date: todayStr(),
     });
-
-    const saved = await article.save();
-    res.status(201).json(saved);
+    res.status(201).json(article);
   } catch (err) {
-    console.error('POST /api/articles error:', err);
-    res.status(500).json({ error: 'Failed to create article.' });
+    console.error('[POST /api/articles]', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// PUT /api/articles/:id  — update (requires auth)
-app.put('/api/articles/:id', requireAuth, async (req, res) => {
+// PUT /api/articles/:id  — full or partial update
+// BUG FIX: admin.html sends partial updates (e.g. just { status, featured })
+// via PUT; this handler merges only the provided fields so nothing is wiped.
+app.put('/api/articles/:id', authenticate, async (req, res) => {
   try {
-    // Recalculate readTime if content changed
-    const updates = { ...req.body };
-    if (updates.content) {
-      updates.readTime = calcReadTime(updates.content);
+    const article = await Article.findById(req.params.id);
+    if (!article) return res.status(404).json({ error: 'Article not found' });
+
+    const { role, name } = req.user;
+    const canEdit = ['admin', 'editor'].includes(role) || article.author === name;
+    if (!canEdit) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    // Build safe update — only merge fields that are actually present in req.body
+    // so admin.html's partial { featured: true } doesn't wipe title/content etc.
+    const allowed = ['title','subtitle','author','authorId','category','content',
+                     'excerpt','tags','img','featured','status','readTime','date'];
+    const updates = {};
+    allowed.forEach(k => { if (k in req.body) updates[k] = req.body[k]; });
+    if (updates.content) updates.readTime = calcReadTime(updates.content);
+
+    // Only admins/editors can change status; contributors can't self-publish
+    if ('status' in updates && !['admin','editor'].includes(role)) {
+      delete updates.status;
     }
 
-    const article = await Article.findByIdAndUpdate(req.params.id, updates, { new: true });
-    if (!article) return res.status(404).json({ error: 'Article not found.' });
-    res.json(article);
-  } catch (err) {
-    console.error('PUT /api/articles error:', err);
-    res.status(500).json({ error: 'Failed to update article.' });
-  }
-});
-
-// DELETE /api/articles/:id  — delete (requires auth)
-app.delete('/api/articles/:id', requireAuth, async (req, res) => {
-  try {
-    await Article.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Article deleted.' });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to delete article.' });
-  }
-});
-
-// PATCH /api/articles/:id/approve  — approve pending article
-app.patch('/api/articles/:id/approve', requireAuth, async (req, res) => {
-  const allowed = ['admin', 'editor'];
-  if (!allowed.includes(req.user.role)) {
-    return res.status(403).json({ error: 'Permission denied.' });
-  }
-  try {
-    const article = await Article.findByIdAndUpdate(
+    const updated = await Article.findByIdAndUpdate(
       req.params.id,
-      { status: 'published' },
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+    res.json(updated);
+  } catch (err) {
+    console.error('[PUT /api/articles/:id]', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/articles/:id
+app.delete('/api/articles/:id', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const deleted = await Article.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Article not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/articles/:id]', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/articles/:id/approve  — used by script.js
+app.patch('/api/articles/:id/approve', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const updated = await Article.findByIdAndUpdate(
+      req.params.id,
+      { $set: { status: 'published' } },
       { new: true }
     );
-    res.json(article);
+    if (!updated) return res.status(404).json({ error: 'Article not found' });
+    res.json(updated);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to approve article.' });
+    console.error('[PATCH /api/articles/:id/approve]', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// PATCH /api/articles/:id/feature  — toggle featured flag
-app.patch('/api/articles/:id/feature', requireAuth, async (req, res) => {
-  const allowed = ['admin', 'editor'];
-  if (!allowed.includes(req.user.role)) {
-    return res.status(403).json({ error: 'Permission denied.' });
-  }
+// PATCH /api/articles/:id/feature  — used by script.js
+app.patch('/api/articles/:id/feature', authenticate, requireRole('admin', 'editor'), async (req, res) => {
   try {
-    // Un-feature all others first, then feature the target
-    await Article.updateMany({}, { featured: false });
-    const article = await Article.findByIdAndUpdate(
+    const article = await Article.findById(req.params.id);
+    if (!article) return res.status(404).json({ error: 'Article not found' });
+    // Toggle: if currently featured, unfeature it; if not, feature it and unfeature all others
+    if (!article.featured) {
+      await Article.updateMany({}, { $set: { featured: false } });
+    }
+    const updated = await Article.findByIdAndUpdate(
       req.params.id,
-      { featured: true },
+      { $set: { featured: !article.featured } },
       { new: true }
     );
-    res.json(article);
+    res.json(updated);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to feature article.' });
+    console.error('[PATCH /api/articles/:id/feature]', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /api/articles/:id/comments  — add reader comment
+// POST /api/articles/:id/comments  — public, no auth required
 app.post('/api/articles/:id/comments', async (req, res) => {
   try {
     const { name, text } = req.body;
-    if (!name || !text) return res.status(400).json({ error: 'name and text are required.' });
-
+    if (!name || !text) return res.status(400).json({ error: 'name and text are required' });
     const article = await Article.findByIdAndUpdate(
       req.params.id,
-      { $push: { comments: { name, date: humanDate(), text } } },
+      { $push: { comments: { name, text, date: todayStr() } } },
       { new: true }
     );
-    if (!article) return res.status(404).json({ error: 'Article not found.' });
+    if (!article) return res.status(404).json({ error: 'Article not found' });
     res.json(article);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to post comment.' });
+    console.error('[POST /api/articles/:id/comments]', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-/* ─────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────
+   EDITORIAL ROUTES
+────────────────────────────────────────────────────────────── */
+
+// GET /api/editorials
+app.get('/api/editorials', async (req, res) => {
+  try {
+    const editorials = await Editorial.find().sort({ createdAt: -1 });
+    res.json(editorials);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/editorials/:id
+app.get('/api/editorials/:id', async (req, res) => {
+  try {
+    const ed = await Editorial.findById(req.params.id);
+    if (!ed) return res.status(404).json({ error: 'Editorial not found' });
+    res.json(ed);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/editorials
+app.post('/api/editorials', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const ed = await Editorial.create({
+      ...req.body,
+      readTime: calcReadTime(req.body.content),
+      date: todayStr(),
+    });
+    res.status(201).json(ed);
+  } catch (err) {
+    console.error('[POST /api/editorials]', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/editorials/:id
+app.put('/api/editorials/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const updates = { ...req.body };
+    if (updates.content) updates.readTime = calcReadTime(updates.content);
+    const updated = await Editorial.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+    if (!updated) return res.status(404).json({ error: 'Editorial not found' });
+    res.json(updated);
+  } catch (err) {
+    console.error('[PUT /api/editorials/:id]', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/editorials/:id
+app.delete('/api/editorials/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    await Editorial.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ──────────────────────────────────────────────────────────────
+   HIGHLIGHT ROUTES
+────────────────────────────────────────────────────────────── */
+
+// GET /api/highlights — public (homepage ticker needs it)
+app.get('/api/highlights', async (req, res) => {
+  try {
+    const highlights = await Highlight.find().sort({ order: 1, createdAt: -1 });
+    res.json(highlights);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/highlights
+app.post('/api/highlights', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const count = await Highlight.countDocuments();
+    const hl = await Highlight.create({ ...req.body, order: count });
+    res.status(201).json(hl);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/highlights/:id — update text, enabled, order
+app.put('/api/highlights/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const allowed = ['text', 'enabled', 'order', 'type'];
+    const updates = {};
+    allowed.forEach(k => { if (k in req.body) updates[k] = req.body[k]; });
+    const updated = await Highlight.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ error: 'Highlight not found' });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/highlights/:id
+app.delete('/api/highlights/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    await Highlight.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ──────────────────────────────────────────────────────────────
+   AUTHOR ROUTES
+────────────────────────────────────────────────────────────── */
+
+// GET /api/authors — public
+app.get('/api/authors', async (req, res) => {
+  try {
+    res.json(await Author.find().sort({ createdAt: -1 }));
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/authors/:id
+app.get('/api/authors/:id', async (req, res) => {
+  try {
+    const author = await Author.findById(req.params.id);
+    if (!author) return res.status(404).json({ error: 'Author not found' });
+    res.json(author);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/authors
+app.post('/api/authors', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const author = await Author.create(req.body);
+    res.status(201).json(author);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/authors/:id
+app.put('/api/authors/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const updated = await Author.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!updated) return res.status(404).json({ error: 'Author not found' });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/authors/:id
+app.delete('/api/authors/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    await Author.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ──────────────────────────────────────────────────────────────
+   SUBSCRIBER ROUTES
+────────────────────────────────────────────────────────────── */
+
+// GET /api/subscribers — admin only
+app.get('/api/subscribers', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    res.json(await Subscriber.find().sort({ createdAt: -1 }));
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/subscribers — public (newsletter signup form)
+app.post('/api/subscribers', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.includes('@'))
+      return res.status(400).json({ error: 'Valid email required' });
+    // Upsert — idempotent, subscribing twice is fine
+    await Subscriber.findOneAndUpdate(
+      { email: email.toLowerCase().trim() },
+      { email: email.toLowerCase().trim() },
+      { upsert: true, new: true }
+    );
+    res.status(201).json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/subscribers]', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/subscribers/:id
+app.delete('/api/subscribers/:id', authenticate, requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    await Subscriber.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ──────────────────────────────────────────────────────────────
+   USER MANAGEMENT ROUTES
+   BUG FIX: Previously addUser() in the frontend only wrote to
+   localStorage. Login checks MongoDB, so new users could never
+   log in. These routes are what the fixed addUser() now calls.
+────────────────────────────────────────────────────────────── */
+
+// GET /api/users — admin only
+app.get('/api/users', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const users = await User.find({}, '-password').sort({ createdAt: 1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/users — create new team member
+app.post('/api/users', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const { name, username, password, role } = req.body;
+    if (!name || !username || !password)
+      return res.status(400).json({ error: 'name, username, and password are required' });
+
+    const existing = await User.findOne({ username: username.toLowerCase().trim() });
+    if (existing) return res.status(409).json({ error: 'Username already exists' });
+
+    const user = await User.create({ name, username, password, role: role || 'viewer' });
+    // Never send password hash back
+    res.status(201).json({ _id: user._id, name: user.name, username: user.username, role: user.role });
+  } catch (err) {
+    console.error('[POST /api/users]', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/users/:id — change role
+app.patch('/api/users/:id', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['admin', 'editor', 'contributor', 'viewer'].includes(role))
+      return res.status(400).json({ error: 'Invalid role' });
+
+    // Prevent an admin from demoting themselves
+    if (req.params.id === String(req.user.id) && role !== 'admin')
+      return res.status(400).json({ error: 'You cannot change your own role' });
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { role } },
+      { new: true, select: '-password' }
+    );
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/users/:id
+app.delete('/api/users/:id', authenticate, requireRole('admin'), async (req, res) => {
+  try {
+    if (req.params.id === String(req.user.id))
+      return res.status(400).json({ error: 'You cannot delete your own account' });
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ──────────────────────────────────────────────────────────────
    IMAGE UPLOAD
-───────────────────────────────────────── */
-
-// POST /api/upload  — upload image, returns { url: "/uploads/filename.jpg" }
-app.post('/api/upload', requireAuth, upload.single('image'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No image file received.' });
-  const url = `/uploads/${req.file.filename}`;
-  res.json({ url });
+────────────────────────────────────────────────────────────── */
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename:    (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + ext);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  },
 });
 
-/* ─────────────────────────────────────────
-   HEALTH CHECK
-───────────────────────────────────────── */
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    time: new Date().toISOString(),
-  });
+app.post('/api/upload', authenticate, upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  res.json({ url: '/uploads/' + req.file.filename });
 });
 
-/* ─────────────────────────────────────────
-   SPA CATCH-ALL
-   Serves index.html for any non-API route so the React-style
-   frontend routing works.
-───────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+   CATCH-ALL — serve index.html for frontend routing
+────────────────────────────────────────────────────────────── */
 app.get('*', (req, res) => {
-  // Avoid catching API requests that weren't matched
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'API route not found.' });
-  }
-  res.sendFile(path.resolve(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-/* ─────────────────────────────────────────
-   GLOBAL ERROR HANDLER
-───────────────────────────────────────── */
-app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err.message);
-  res.status(500).json({ error: err.message || 'Internal server error.' });
+/* ──────────────────────────────────────────────────────────────
+   ERROR HANDLER
+────────────────────────────────────────────────────────────── */
+app.use((err, req, res, next) => {
+  console.error('[Unhandled error]', err);
+  res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-/* ─────────────────────────────────────────
-   START
-───────────────────────────────────────── */
-app.listen(PORT, () => {
-  console.log(`🚀  The Newsbie server running on port ${PORT}`);
-});
+/* ──────────────────────────────────────────────────────────────
+   CONNECT + START
+────────────────────────────────────────────────────────────── */
+mongoose.connect(MONGODB_URI)
+  .then(() => {
+    console.log('✅ MongoDB connected:', MONGODB_URI.replace(/\/\/.*@/, '//<credentials>@'));
+    app.listen(PORT, () => console.log(`🗞  The Newsbie running on port ${PORT}`));
+  })
+  .catch(err => {
+    console.error('❌ MongoDB connection failed:', err.message);
+    process.exit(1);
+  });
+
+
+/*
+ * ================================================================
+ * seed.js — COPY THIS TO A SEPARATE FILE, run once, then delete
+ * ================================================================
+ *
+ * node seed.js
+ *
+ * ----------------------------------------------------------------
+ * require('dotenv').config();
+ * const mongoose = require('mongoose');
+ * const bcrypt   = require('bcryptjs');
+ *
+ * const MONGODB_URI = process.env.MONGODB_URI;
+ *
+ * const userSchema = new mongoose.Schema({
+ *   name:     String,
+ *   username: { type: String, lowercase: true },
+ *   password: String,
+ *   role:     String,
+ * });
+ * userSchema.pre('save', async function(next) {
+ *   if (this.isModified('password')) this.password = await bcrypt.hash(this.password, 12);
+ *   next();
+ * });
+ * const User = mongoose.model('User', userSchema);
+ *
+ * mongoose.connect(MONGODB_URI).then(async () => {
+ *   const existing = await User.findOne({ username: 'naman2170' });
+ *   if (!existing) {
+ *     await User.create({ name: 'Naman', username: 'naman2170', password: 'Naman123', role: 'admin' });
+ *     console.log('✅ Admin user naman2170 created.');
+ *   } else {
+ *     console.log('ℹ️  Admin user already exists.');
+ *   }
+ *   await mongoose.disconnect();
+ * }).catch(e => { console.error(e); process.exit(1); });
+ * ----------------------------------------------------------------
+ */
+
+/*
+ * ================================================================
+ * .env (local development — DO NOT commit to git)
+ * ================================================================
+ *
+ * MONGODB_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/newsbie?retryWrites=true&w=majority
+ * JWT_SECRET=replace-with-a-long-random-string-at-least-32-chars
+ * PORT=3000
+ *
+ * ================================================================
+ * package.json additions needed
+ * ================================================================
+ *
+ * {
+ *   "scripts": {
+ *     "start": "node server.js",
+ *     "dev": "nodemon server.js"
+ *   },
+ *   "dependencies": {
+ *     "bcryptjs": "^2.4.3",
+ *     "cors": "^2.8.5",
+ *     "dotenv": "^16.0.0",
+ *     "express": "^4.18.0",
+ *     "jsonwebtoken": "^9.0.0",
+ *     "mongoose": "^8.0.0",
+ *     "multer": "^1.4.5"
+ *   }
+ * }
+ *
+ * ================================================================
+ * Railway deployment checklist
+ * ================================================================
+ *
+ * 1. Push your code to GitHub (with public/ folder containing your HTML/JS/CSS)
+ * 2. In Railway: New Project → Deploy from GitHub repo
+ * 3. Set environment variables in Railway dashboard:
+ *      MONGODB_URI   → your MongoDB Atlas connection string
+ *      JWT_SECRET    → any long random string (use: openssl rand -hex 32)
+ * 4. Railway auto-detects PORT — no need to set it manually
+ * 5. Run seed.js once locally (pointing at your production MONGODB_URI)
+ *    to create the initial admin user
+ */

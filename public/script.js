@@ -260,7 +260,12 @@ const PLACEHOLDERS = [
   'https://images.unsplash.com/photo-1519669556878-63bdad8a1a49?w=800&q=70',
   'https://images.unsplash.com/photo-1495020689067-958852a7765e?w=800&q=70',
 ];
-function getImg(a)    { return a.img || PLACEHOLDERS[(a.id || 0) % PLACEHOLDERS.length] }
+// artId(): returns a stable string ID for any article regardless of
+// whether it came from MongoDB (has _id) or is a local default (has numeric id).
+// This is used everywhere we need to compare or look up article identities.
+const artId = a => String(a?._id ?? a?.id ?? '');
+
+function getImg(a)    { return a.img || PLACEHOLDERS[Math.abs(artId(a).split('').reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % PLACEHOLDERS.length] }
 function getEdImg(e,i){ return e.img || PLACEHOLDERS[i % PLACEHOLDERS.length] }
 
 function dateStr() { return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) }
@@ -306,7 +311,7 @@ function renderHome() {
 
   // HERO
   const feat = filt.find(a => a.featured) || filt[0];
-  const rest = filt.filter(a => a.id !== feat?.id);
+  const rest = filt.filter(a => artId(a) !== artId(feat));
   if (feat) {
     document.getElementById('hero-img').src    = getImg(feat);
     document.getElementById('hero-img').alt    = feat.title;
@@ -324,8 +329,8 @@ function renderHome() {
   let sideArts;
   if (sectionCfg.editors?.length) {
     sideArts = sectionCfg.editors
-      .map(id => articles.find(a => a.id === id))
-      .filter(a => a && (a.status || 'published') === 'published' && a.id !== feat?.id)
+      .map(id => articles.find(a => artId(a) === String(id)))
+      .filter(a => a && (a.status || 'published') === 'published' && artId(a) !== artId(feat))
       .slice(0, 3);
   }
   if (!sideArts || !sideArts.length) sideArts = rest.slice(0, 3);
@@ -346,10 +351,12 @@ function renderHome() {
   let gridArts;
   if (sectionCfg.latest?.length) {
     gridArts = sectionCfg.latest
-      .map(id => articles.find(a => a.id === id))
+      .map(id => articles.find(a => artId(a) === String(id)))
       .filter(a => a && (a.status || 'published') === 'published');
   }
-  if (!gridArts || !gridArts.length) gridArts = rest.slice(3);
+  // FIX: was rest.slice(3) which left the grid empty when ≤4 articles existed.
+  // Now falls back to all non-hero published articles so the grid is always populated.
+  if (!gridArts || !gridArts.length) gridArts = rest;
   const grid = document.getElementById('articles-grid');
   grid.innerHTML = gridArts.length === 0
     ? `<div style="padding:32px;color:var(--ink4);font-family:var(--fs);font-size:13px;grid-column:1/-1;text-align:center">No articles in this section.</div>`
@@ -366,7 +373,7 @@ function renderHome() {
   let trendArts;
   if (sectionCfg.trending?.length) {
     trendArts = sectionCfg.trending
-      .map(id => articles.find(a => a.id === id))
+      .map(id => articles.find(a => artId(a) === String(id)))
       .filter(a => a && (a.status || 'published') === 'published')
       .slice(0, 5);
   }
@@ -1127,8 +1134,9 @@ function renderSections() {
     el.innerHTML = pub.length === 0
       ? `<div style="padding:14px;font-family:var(--fs);font-size:12px;color:var(--ink4)">No published articles.</div>`
       : pub.map(a => {
-          const isSel = sel.includes(a.id) || sel.includes(a._id);
-          return `<div class="sm-art-row ${isSel ? 'selected' : ''}" id="sm-${key}-${a.id}" onclick="toggleSM('${key}','${a._id || a.id}')">
+          const aid = artId(a);
+          const isSel = sel.some(id => String(id) === aid);
+          return `<div class="sm-art-row ${isSel ? 'selected' : ''}" id="sm-${key}-${aid}" onclick="toggleSM('${key}','${aid}')">
         <div class="sm-check"></div>
         <img class="sm-thumb" src="${getImg(a)}" alt="">
         <div class="sm-art-title">${a.title}</div>
@@ -1140,7 +1148,9 @@ function renderSections() {
 }
 function toggleSM(key, id) {
   if (!sectionCfg[key]) sectionCfg[key] = [];
-  const idx = sectionCfg[key].indexOf(id);
+  // FIX: was indexOf() which uses strict ===, failing when stored IDs are strings
+  // but compared against numbers (or vice versa). findIndex with String() coercion fixes this.
+  const idx = sectionCfg[key].findIndex(x => String(x) === String(id));
   const max = SM[key]?.max;
   if (idx >= 0) {
     sectionCfg[key].splice(idx, 1);
@@ -1486,8 +1496,29 @@ function renderUsers(){
   <td>${u.id!==currentUser?.id?`<button class="aar-btn" onclick="removeUser(${i})" style="color:var(--accent)">Remove</button>`:'<span style="font-size:10px;color:var(--ink4)">Active session</span>'}</td>
 </tr>`).join('');
 }
-function changeRole(idx,role){if(!perm('users'))return;users[idx].role=role;save();renderUsers();showToast(`Role updated to ${role}`)}
-function removeUser(idx){if(!perm('users'))return;if(!confirm(`Remove ${users[idx].name}?`))return;users.splice(idx,1);save();renderUsers();showToast('User removed.')}
+async function changeRole(idx,role){
+  if(!perm('users'))return;
+  users[idx].role=role;
+  save();renderUsers();
+  // Sync to backend if user has a backend _id
+  const u = users[idx];
+  if(u.id && String(u.id).length > 10) { // likely a MongoDB ObjectID string
+    try { await apiRequest('/users/' + u.id, 'PATCH', { role }); }
+    catch(e){ console.warn('changeRole: backend sync failed:', e.message); }
+  }
+  showToast(`Role updated to ${role}`);
+}
+async function removeUser(idx){
+  if(!perm('users'))return;
+  if(!confirm(`Remove ${users[idx].name}?`))return;
+  const u = users[idx];
+  users.splice(idx,1);
+  save();renderUsers();showToast('User removed.');
+  if(u.id && String(u.id).length > 10) {
+    try { await apiRequest('/users/' + u.id, 'DELETE'); }
+    catch(e){ console.warn('removeUser: backend sync failed:', e.message); }
+  }
+}
 function toggleAddUser(){
   const form=document.getElementById('add-user-form');
   const isShowing=form.classList.contains('js-hidden');
@@ -1498,7 +1529,10 @@ function toggleAddUser(){
     setTimeout(()=>form.scrollIntoView({behavior:'smooth',block:'nearest'}),50);
   }
 }
-function addUser(){
+// FIX: addUser must be async so it can register the user on the MongoDB backend.
+// Previously it only wrote to localStorage, so new users could never log in
+// because doLogin() calls /api/auth/login which checks the database, not localStorage.
+async function addUser(){
   const name=document.getElementById('nu-name').value.trim();
   const username=document.getElementById('nu-user').value.trim();
   const password=document.getElementById('nu-pass').value.trim();
@@ -1511,7 +1545,26 @@ function addUser(){
   if(!username){showErr('⚠ Username is required.');document.getElementById('nu-user')?.focus();return;}
   if(!password){showErr('⚠ Password is required.');document.getElementById('nu-pass')?.focus();return;}
   if(users.find(u=>u.username===username)){showErr('⚠ Username already exists.');document.getElementById('nu-user')?.focus();return;}
-  users.push({id:Date.now(),name,username,password,role});
+
+  // Disable button during request
+  const addBtn = document.querySelector('#add-user-form .publish-btn');
+  if(addBtn){ addBtn.disabled=true; addBtn.textContent='⏳ Creating…'; }
+
+  try {
+    // Register in backend so the user can actually log in via /api/auth/login
+    const created = await apiRequest('/users', 'POST', { name, username, password, role });
+    // Merge backend-assigned _id into local users array for display
+    users.push({ id: created._id || Date.now(), name, username, role });
+  } catch(err) {
+    console.warn('addUser: backend registration failed, falling back to local-only.', err.message);
+    // Graceful fallback: keep locally so the UI table shows the user,
+    // but warn that login will not work until the backend is updated.
+    users.push({ id: Date.now(), name, username, password, role });
+    showToast(`⚠ Saved locally. Ensure /api/users POST exists on the backend so this user can log in.`);
+  } finally {
+    if(addBtn){ addBtn.disabled=false; addBtn.textContent='Add Member'; }
+  }
+
   if(errEl)errEl.textContent='';
   save();toggleAddUser();
   ['nu-name','nu-user','nu-pass'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
