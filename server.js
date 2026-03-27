@@ -766,10 +766,12 @@ app.use((err, req, res, next) => {
 mongoose.connect(MONGODB_URI)
   .then(() => {
     console.log('✅ MongoDB connected:', MONGODB_URI.replace(/\/\/.*@/, '//<credentials>@'));
-    app.listen(PORT, () => console.log(`🗞  The Newsbie running on port ${PORT}`));
-  })
+    app.listen(PORT,"0.0.0.0",()=>{
+      console.log(`🗞 server running on port ${PORT}`);
+  });
+})
   .catch(err => {
-    console.error('❌ MongoDB connection failed:', err.message);
+    console.error(" MongoDB connection failed:",err.message);
     process.exit(1);
   });
 
