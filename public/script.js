@@ -41,7 +41,7 @@ const DEFAULT_ARTICLES = [
 
 The Strait of Hormuz, separating the Persian Gulf from the Gulf of Oman, is the world's most strategically critical maritime chokepoint. At its narrowest point, the usable shipping lane is barely 3.2 kilometers wide in each direction.
 
-> "If Hormuz closes, the global economy doesn't just feel it. It collapses." — Dr. Margaret Calloway, Johns Hopkins University
+> "If Hormuz closes, the global economy esn't just feel it. It collapses." — Dr. Margaret Calloway, Johns Hopkins University
 
 Iran controls the northern shore of the strait. The Persian Gulf states — Saudi Arabia, the UAE, Kuwait, Qatar — depend on it for virtually all their exports.
 

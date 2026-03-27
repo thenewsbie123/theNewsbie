@@ -2,11 +2,12 @@
 // This file connects your app to MongoDB using Mongoose.
 
 // config/db.js
+require("dotenv").config();
 const mongoose = require("mongoose");
 
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(process.env.MONGO_URI);
+    const conn = await mongoose.connect(process.env.MONGODB_URI);
 
     console.log(`🟢 MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {
