@@ -13,7 +13,7 @@ connectDB();
 // ── Middleware ──────────────────────────────────
 app.use(express.json({ limit: "10mb" }));        // Parse JSON request bodies (10mb for base64 images)
 app.use(express.urlencoded({ extended: true })); // Parse form data
-app.use(express.static(__dirname));              // Serve your HTML/CSS/JS files
+app.use(express.static(__dirname+ "/public"));              // Serve your HTML/CSS/JS files
 
 // ── API Routes ──────────────────────────────────
 app.use("/api/auth",        require("./routes/auth"));
