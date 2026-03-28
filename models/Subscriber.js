@@ -1,12 +1,14 @@
 // models/Subscriber.js
-const mongoose = require("mongoose");
+'use strict';
+
+const mongoose = require('mongoose');
 
 const subscriberSchema = new mongoose.Schema(
   {
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    date:  { type: String, default: "" },
+    date:  { type: String, default: '' },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Subscriber", subscriberSchema);
+module.exports = mongoose.model('Subscriber', subscriberSchema);

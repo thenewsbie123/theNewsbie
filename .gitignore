@@ -1,5 +1,15 @@
+# Dependencies
 node_modules/
+
+# Environment secrets — NEVER commit this
 .env
-uploads/
-*.log
+
+# Uploaded images (too large for git, ephemeral on Railway anyway)
+public/uploads/
+
+# OS / editor noise
 .DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

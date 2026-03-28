@@ -1,0 +1,523 @@
+{
+  "info": {
+    "name": "The Newsbie API",
+    "_postman_id": "newsbie-api-collection",
+    "description": "Complete API test collection for The Newsbie. \n\n**Setup:**\n1. Import this collection into Postman\n2. Set the `baseUrl` collection variable to your Railway URL (e.g. `https://your-app.up.railway.app`)\n3. Run the `Login` request first — the token is saved automatically to `authToken`\n4. All authenticated requests use `authToken` automatically\n\n**Quick test order:**\n1. Health Check\n2. Login (saves token)\n3. Get Articles (public)\n4. Publish Article\n5. Approve / Feature",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://your-app.up.railway.app",
+      "description": "Change this to your Railway deployment URL"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "description": "Auto-populated by the Login request"
+    },
+    {
+      "key": "articleId",
+      "value": "",
+      "description": "Auto-populated after Create Article"
+    }
+  ],
+  "item": [
+    {
+      "name": "🔍 Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Status is ok', () => {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.status).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/health",
+            "description": "Railway uses this endpoint for its healthcheck probe. Should always return 200."
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔐 Auth",
+      "item": [
+        {
+          "name": "Login — Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login successful', () => pm.response.to.have.status(200));",
+                  "pm.test('Token returned', () => {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.token).to.be.a('string');",
+                  "    pm.collectionVariables.set('authToken', json.token);",
+                  "    console.log('Token saved:', json.token.substring(0, 20) + '...');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"naman2170\",\n  \"password\": \"Naman123\"\n}"
+            },
+            "description": "Logs in as admin. Token is auto-saved to `authToken` collection variable."
+          }
+        },
+        {
+          "name": "Login — Editor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Editor login successful', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "if (json.token) pm.collectionVariables.set('authToken', json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"editor\",\n  \"password\": \"editor123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login — Contributor",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"contributor\",\n  \"password\": \"contrib123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login — Wrong Password (expect 401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejected with 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"naman2170\",\n  \"password\": \"wrongpassword\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📰 Articles",
+      "item": [
+        {
+          "name": "Get All Articles (public)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns array', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "const arts = pm.response.json();",
+                  "if (arts.length > 0) {",
+                  "    pm.collectionVariables.set('articleId', arts[0]._id);",
+                  "    console.log('First article ID saved:', arts[0]._id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/articles",
+            "description": "Public endpoint — no auth needed. Returns published articles only."
+          }
+        },
+        {
+          "name": "Get All Articles — Admin (all statuses)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const arts = pm.response.json();",
+                  "const statuses = [...new Set(arts.map(a => a.status))];",
+                  "console.log('Statuses returned:', statuses);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/articles?status=all",
+              "query": [{ "key": "status", "value": "all" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "description": "Admin/editor sees pending + draft + published articles."
+          }
+        },
+        {
+          "name": "Get Single Article",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/articles/{{articleId}}",
+            "description": "Fetch a specific article by its MongoDB _id."
+          }
+        },
+        {
+          "name": "Publish Article (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const art = pm.response.json();",
+                  "if (art._id) {",
+                  "    pm.collectionVariables.set('articleId', art._id);",
+                  "    console.log('New article ID:', art._id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/articles",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Test Article From Postman\",\n  \"subtitle\": \"Testing the publish pipeline end-to-end\",\n  \"author\": \"Postman Tester\",\n  \"category\": \"Technology\",\n  \"content\": \"## Introduction\\n\\nThis article was published via the Postman API test.\\n\\n> Everything is working correctly if you see this on the homepage.\",\n  \"excerpt\": \"A quick test article to verify the publish pipeline.\",\n  \"tags\": [\"test\", \"api\"],\n  \"img\": \"https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?w=900&q=80\",\n  \"featured\": false,\n  \"status\": \"published\"\n}"
+            },
+            "description": "Creates and publishes an article. Requires admin or editor token."
+          }
+        },
+        {
+          "name": "Submit Article (Contributor → Pending)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const art = pm.response.json();",
+                  "pm.test('Status is pending', () => pm.expect(art.status).to.eql('pending'));",
+                  "if (art._id) pm.collectionVariables.set('articleId', art._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/articles",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Contributor Article — Awaiting Review\",\n  \"author\": \"James Okafor\",\n  \"category\": \"Opinion\",\n  \"content\": \"This was submitted by a contributor and should be pending review.\"\n}",
+              "description": "Login as contributor first — status will be forced to 'pending' by the server."
+            }
+          }
+        },
+        {
+          "name": "Update Article",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/api/articles/{{articleId}}",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Updated Title From Postman\",\n  \"subtitle\": \"Subtitle was also updated\"\n}",
+              "description": "Partial update — only provided fields are changed. title/content etc. not in body remain untouched."
+            }
+          }
+        },
+        {
+          "name": "Approve Pending Article",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const art = pm.response.json();",
+                  "pm.test('Now published', () => pm.expect(art.status).to.eql('published'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/articles/{{articleId}}/approve",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "description": "Admin/editor only. Changes status from pending → published."
+          }
+        },
+        {
+          "name": "Toggle Featured",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const art = pm.response.json();",
+                  "console.log('Featured is now:', art.featured);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/articles/{{articleId}}/feature",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "description": "Toggles featured status. Auto-unfeaturs all other articles first."
+          }
+        },
+        {
+          "name": "Add Comment (public)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/articles/{{articleId}}/comments",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Reader\",\n  \"text\": \"Great article! Testing the comment system.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Article (Admin only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Success', () => pm.expect(pm.response.json().success).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/articles/{{articleId}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "description": "Permanently deletes an article. Admin role required."
+          }
+        }
+      ]
+    },
+    {
+      "name": "📝 Editorials",
+      "item": [
+        {
+          "name": "Get All Editorials",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/editorials"
+          }
+        },
+        {
+          "name": "Publish Editorial",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/editorials",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"Opinion\",\n  \"title\": \"A Test Editorial\",\n  \"subtitle\": \"Testing the editorial pipeline\",\n  \"author\": \"The Newsbie Editorial Board\",\n  \"content\": \"## Our Position\\n\\nThis is a test editorial published via Postman.\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "⚡ Highlights",
+      "item": [
+        {
+          "name": "Get All Highlights",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/highlights",
+            "description": "Public — used by the homepage ticker."
+          }
+        },
+        {
+          "name": "Add Highlight",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/highlights",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BREAKING: Test highlight added via Postman\",\n  \"enabled\": true,\n  \"type\": \"custom\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "✍️ Authors",
+      "item": [
+        {
+          "name": "Get All Authors",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/authors"
+          }
+        },
+        {
+          "name": "Create Author",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/authors",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Author\",\n  \"role\": \"Staff Reporter\",\n  \"bio\": \"A test author created via Postman.\",\n  \"social\": { \"tw\": \"testauthor\", \"web\": \"https://example.com\" }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👥 Users",
+      "item": [
+        {
+          "name": "Get All Users (Admin only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const users = pm.response.json();",
+                  "pm.test('No passwords exposed', () => {",
+                  "    users.forEach(u => pm.expect(u.password).to.be.undefined);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/users",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }]
+          }
+        },
+        {
+          "name": "Add Team Member",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/users",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New Reporter\",\n  \"username\": \"newreporter\",\n  \"password\": \"SecurePass123\",\n  \"role\": \"contributor\"\n}",
+              "description": "Creates user in MongoDB — password is hashed. New user can now log in immediately."
+            }
+          }
+        },
+        {
+          "name": "Change Role",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/users/USER_ID_HERE",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"role\": \"editor\" }"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📧 Subscribers",
+      "item": [
+        {
+          "name": "Subscribe (public)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/subscribers",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"email\": \"test@example.com\" }"
+            }
+          }
+        },
+        {
+          "name": "Get All Subscribers (Admin)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/subscribers",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }]
+          }
+        }
+      ]
+    }
+  ]
+}
